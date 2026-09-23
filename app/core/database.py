@@ -1,10 +1,10 @@
-from translation_backend.app.core.config import database_settings
+from app.core.config import database_settings
 
 TORTOISE_ORM = {
     "connections": {"default": database_settings.database_url},
     "apps": {
         "models": {
-            "models": ["translation_backend.models"],
+            "models": ["models"],
             "default_connection": "default",
         }
     },

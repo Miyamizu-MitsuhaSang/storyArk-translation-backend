@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from starlette.responses import JSONResponse, Response
 
-from translation_backend.app.api.modules.auth.auth_schemas import (
+from app.api.modules.auth.auth_schemas import (
     ChangePasswordRequest,
     ErrorResponse,
     LoginRequest,
@@ -10,9 +10,9 @@ from translation_backend.app.api.modules.auth.auth_schemas import (
     RefreshRequest,
     TokenResponse,
 )
-from translation_backend.app.api.modules.auth.service import AuthError, AuthService
-from translation_backend.app.core.config import app_settings
-from translation_backend.models import User
+from app.api.modules.auth.service import AuthError, AuthService
+from app.core.config import app_settings
+from models import User
 
 
 auth_router = APIRouter()

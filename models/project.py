@@ -3,7 +3,7 @@ from typing import Any
 
 from tortoise import fields
 
-from translation_backend.models.base import TimestampedModel
+from models.base import TimestampedModel
 
 PROJECT_STATUSES = ("draft", "active", "archived")
 PROJECT_MEMBER_ROLES = ("owner", "manager", "translator", "reviewer", "viewer")

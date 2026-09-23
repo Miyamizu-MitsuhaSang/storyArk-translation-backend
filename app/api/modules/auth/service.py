@@ -10,14 +10,14 @@ import jwt
 from pwdlib import PasswordHash
 from tortoise.expressions import Q
 
-from translation_backend.app.api.modules.auth.auth_schemas import (
+from app.api.modules.auth.auth_schemas import (
     MeResponse,
     ProjectSummary,
     TokenResponse,
     UserResponse,
 )
-from translation_backend.app.core.config import app_settings
-from translation_backend.models import ProjectMember, RefreshToken, User
+from app.core.config import app_settings
+from models import ProjectMember, RefreshToken, User
 
 
 class AuthError(Exception):

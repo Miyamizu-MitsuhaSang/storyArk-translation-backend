@@ -1,5 +1,5 @@
-from translation_backend.models.auth import RefreshToken, User
-from translation_backend.models.project import (
+from models.auth import RefreshToken, User
+from models.project import (
     Project,
     ProjectLanguagePair,
     ProjectMember,

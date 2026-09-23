@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from translation_backend.app.core.config import app_settings
-from translation_backend.app.core.schemas import (
+from app.core.config import app_settings
+from app.core.schemas import (
     RagIndexRequest,
     RagIndexResponse,
     RagSearchRequest,
     RagSearchResponse,
 )
-from translation_backend.app.api.modules.rag.service import RagService
+from app.api.modules.rag.service import RagService
 
 router = APIRouter(prefix=f"{app_settings.api_prefix}/rag", tags=["rag"])
 _rag_service = RagService()

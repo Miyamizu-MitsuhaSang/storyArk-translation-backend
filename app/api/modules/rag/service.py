@@ -2,7 +2,7 @@ from typing import Any
 
 from translate_manager_rag import SparseMipsRetriever
 
-from translation_backend.app.core.schemas import RagDocument, SparseVector
+from app.core.schemas import RagDocument, SparseVector
 
 
 class RagService:

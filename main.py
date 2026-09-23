@@ -4,11 +4,11 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from translation_backend.app.api.modules.auth.routes import register_auth_exception_handler
-from translation_backend.app.api.modules.router import api_router
-from translation_backend.app.core.config import app_settings, database_settings
-from translation_backend.app.core.database import TORTOISE_ORM
-from translation_backend.app.core.logging import configure_logging, install_request_logging
+from app.api.modules.auth.routes import register_auth_exception_handler
+from app.api.modules.router import api_router
+from app.core.config import app_settings, database_settings
+from app.core.database import TORTOISE_ORM
+from app.core.logging import configure_logging, install_request_logging
 from tortoise import Tortoise
 
 
@@ -16,7 +16,7 @@ from tortoise import Tortoise
 async def lifespan(app: FastAPI):
     await Tortoise.init(config=TORTOISE_ORM)
     if database_settings.redis_launch is True:
-        from translation_backend.app.core.redis import close_redis, init_redis
+        from app.core.redis import close_redis, init_redis
 
         app.state.redis = await init_redis()
     else:

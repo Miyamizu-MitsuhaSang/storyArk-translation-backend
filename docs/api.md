@@ -10,7 +10,7 @@
 
 ```text
 docs/api.md
-src/translation_backend/docs/api.md
+docs/api.md
 frontend/docs/api.md
 ```
 
@@ -822,7 +822,7 @@ POST /api/v1/rag/search
 当前代码目录采用模块化 FastAPI 结构：
 
 ```text
-src/translation_backend/app/api/modules/
+app/api/modules/
   auth/       认证模块（已建立目录，接口待实现）
   health/     健康检查
   rag/        RAG 验证接口和 SDK 适配器
