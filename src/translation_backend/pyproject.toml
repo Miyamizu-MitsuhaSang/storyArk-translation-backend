@@ -1,0 +1,32 @@
+[project]
+name = "translation-platform"
+version = "0.1.0"
+description = "Backend foundation for an internal game translation platform"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.116.0",
+    "httpx>=0.28.0",
+    "PyJWT>=2.10.1",
+    "pydantic-settings>=2.10.0",
+    "pwdlib[argon2]>=0.2.1",
+    "asyncpg>=0.30.0",
+    "tortoise-orm>=0.25.1",
+    "translate-manager-rag",
+    "uvicorn[standard]>=0.35.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.0",
+]
+
+[tool.uv.sources]
+translate-manager-rag = { git = "https://github.com/Miyamizu-MitsuhaSang/storyArk-rag-sdk.git", branch = "main" }
+
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["translation_backend*"]
