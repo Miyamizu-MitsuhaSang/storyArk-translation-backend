@@ -2,25 +2,19 @@
 
 通用 CAT/AI 翻译平台 API 设计草案。本文档描述第一版业务 API 契约，作为 FastAPI 路由、Pydantic Schema 和前端 API client 的共同依据。
 
-当前仓库只实现了健康检查和基础 RAG 验证接口；本文档中的认证、项目、文档、segment、术语、TM、审核和导出接口属于后续实现范围。设计先以通用游戏本地化 CAT 平台为目标，后续可以根据实际业务删减字段。
+当前后端已实现健康检查、认证和基础 RAG 验证接口。本文档还描述项目、文档、segment、术语、TM、审核和导出等后续接口，设计先以通用游戏本地化 CAT 平台为目标，后续可以根据实际业务删减字段。
 
 ## 文档源与同步
 
-`api-contract/docs/api.md` 是 API 文档的唯一源文件。仓库内的以下文件是可分别提交到前端、后端 Git 仓库的同步副本：
+`api-contract/docs/api.md` 是平台仓库中的 API 文档源文件；本仓库保留供后端使用的同步副本。平台源文件和前端副本不包含在本仓库中：
 
 ```text
 docs/api.md
-docs/api.md
-frontend/docs/api.md
 ```
 
-修改 API 文档后，在仓库根目录执行：
+修改 API 契约时，请在平台仓库更新源文件并同步后，再将后端副本更新到本仓库。
 
-```bash
-./scripts/sync-api-docs.sh
-```
-
-不要直接编辑三个副本。未来将前端和后端拆成独立仓库时，可以把各自的 `docs/api.md` 和同步后的提交分别上传，不依赖跨仓库软链接。
+当前运行接口以本服务的 FastAPI OpenAPI 文档为准；本文件中尚未实现的接口属于契约规划。
 
 ## 1. 基本约定
 
@@ -823,7 +817,7 @@ POST /api/v1/rag/search
 
 ```text
 app/api/modules/
-  auth/       认证模块（已建立目录，接口待实现）
+  auth/       用户认证接口和服务
   health/     健康检查
   rag/        RAG 验证接口和 SDK 适配器
 ```
