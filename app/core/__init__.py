@@ -1,6 +1,6 @@
 """Core configuration and API contracts."""
 
-from app.core.schemas import (
+from translation_backend.app.core.schemas import (
     HealthResponse,
     RagDocument,
     RagIndexRequest,

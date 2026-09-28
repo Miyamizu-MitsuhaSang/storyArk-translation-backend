@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, Request
-from fastapi.security import OAuth2PasswordBearer
 from starlette.responses import JSONResponse, Response
 
-from app.api.modules.auth.auth_schemas import (
+from translation_backend.app.api.modules.auth.auth_schemas import (
     ChangePasswordRequest,
     ErrorResponse,
     LoginRequest,
@@ -10,30 +9,15 @@ from app.api.modules.auth.auth_schemas import (
     RefreshRequest,
     TokenResponse,
 )
-from app.api.modules.auth.service import AuthError, AuthService
-from app.core.config import app_settings
-from models import User
+from translation_backend.app.application.auth.service import AuthError, AuthService
+from translation_backend.app.core.security import (
+    get_auth_service,
+    get_current_user,
+)
+from app.models import User
 
 
 auth_router = APIRouter()
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"{app_settings.api_prefix}/auth/login",
-    auto_error=False,
-)
-_auth_service = AuthService()
-
-
-def get_auth_service() -> AuthService:
-    return _auth_service
-
-
-async def get_current_user(
-    token: str | None = Depends(oauth2_scheme),
-    service: AuthService = Depends(get_auth_service),
-) -> User:
-    if not token:
-        raise AuthError("UNAUTHORIZED", "需要登录")
-    return await service.user_from_access_token(token)
 
 
 async def _handle_auth_error(request: Request, exc: AuthError) -> JSONResponse:
@@ -100,3 +84,8 @@ async def change_password(
 ) -> Response:
     await service.change_password(user, request.current_password, request.new_password)
     return Response(status_code=204)
+
+
+from translation_backend.app.api.modules.auth.api_key.routes import user_api_router
+
+auth_router.include_router(user_api_router)

@@ -2,19 +2,25 @@
 
 通用 CAT/AI 翻译平台 API 设计草案。本文档描述第一版业务 API 契约，作为 FastAPI 路由、Pydantic Schema 和前端 API client 的共同依据。
 
-当前后端已实现健康检查、认证和基础 RAG 验证接口。本文档还描述项目、文档、segment、术语、TM、审核和导出等后续接口，设计先以通用游戏本地化 CAT 平台为目标，后续可以根据实际业务删减字段。
+当前仓库只实现了健康检查和基础 RAG 验证接口；本文档中的认证、项目、文档、segment、术语、TM、审核和导出接口属于后续实现范围。设计先以通用游戏本地化 CAT 平台为目标，后续可以根据实际业务删减字段。
 
 ## 文档源与同步
 
-`api-contract/docs/api.md` 是平台仓库中的 API 文档源文件；本仓库保留供后端使用的同步副本。平台源文件和前端副本不包含在本仓库中：
+`api-contract/docs/api.md` 是 API 文档的唯一源文件。仓库内的以下文件是可分别提交到前端、后端 Git 仓库的同步副本：
 
 ```text
 docs/api.md
+src/translation_backend/docs/api.md
+src/translation_frontend/docs/api.md
 ```
 
-修改 API 契约时，请在平台仓库更新源文件并同步后，再将后端副本更新到本仓库。
+修改 API 文档后，在仓库根目录执行：
 
-当前运行接口以本服务的 FastAPI OpenAPI 文档为准；本文件中尚未实现的接口属于契约规划。
+```bash
+./scripts/sync-api-docs.sh
+```
+
+不要直接编辑三个副本。未来将前端和后端拆成独立仓库时，可以把各自的 `docs/api.md` 和同步后的提交分别上传，不依赖跨仓库软链接。
 
 ## 1. 基本约定
 
@@ -252,6 +258,47 @@ Request:
 ```
 
 成功返回 `204`，并撤销当前用户的其他 refresh token。
+
+### GET/POST `/auth/me/api-keys`
+
+当前登录用户管理自己拥有的 AI provider API key。该接口属于认证/用户域，不绑定具体项目；同一用户可以为同一个 provider 保存多把 key。
+
+GET 返回脱敏元数据，不包含 secret 原文：
+
+```json
+{
+  "items": [
+    {
+      "id": "user-key-123",
+      "provider": "openai",
+      "label": "工作账号",
+      "masked_secret": "sk-proj-••••••••1234",
+      "last_four": "1234",
+      "status": "active",
+      "created_at": "2026-09-24T03:00:00Z",
+      "last_used_at": "2026-09-24T03:10:00Z"
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+```
+
+POST 只接受一次性 write-only secret：
+
+```json
+{
+  "provider": "openai",
+  "label": "工作账号",
+  "secret": "sk-proj-example"
+}
+```
+
+成功返回 `201`，只返回 `{id,provider,label,masked_secret,last_four,status,created_at}`，绝不返回 `secret`。支持的 provider 包括 `openai`（ChatGPT）、`anthropic`（Claude）、`google`、`qwen`、`deepseek`、`kimi`、`doubao`、`zhipu`、`minimax`、`mistral`、`groq` 和 `custom`。响应、日志、审计事件、错误信息和追踪数据均不得包含 secret。
+
+### GET/PATCH/DELETE `/auth/me/api-keys/{key_id}`
+
+GET 返回单个 key 的脱敏元数据。PATCH 只允许修改 `{label,status}`；如需轮换 secret，必须重新 POST 创建一把 key，再停用旧 key。DELETE 永久删除该用户 key；如果该 key 仍绑定项目，返回 `409 API_KEY_IN_USE`，必须先解除所有项目绑定。用户只能访问自己的 key，不存在时统一返回 `404`。
 
 ## 4. Project API
 
@@ -796,6 +843,8 @@ POST /api/v1/rag/index
 POST /api/v1/rag/search
 ```
 
+两个验证接口的 JSON 请求体都支持 `project_id` 字段，默认值为 `default`。后端业务层按 `project_id` 隔离进程内索引；project/document 模块应调用后端 RAG 业务函数，不要直接依赖 SDK。
+
 生产实现应将索引绑定到 `project_id`、语言对和版本，并通过异步任务完成重建；不能继续使用当前仅存在于进程内、重启后丢失的索引作为生产存储。
 
 ## 13. Recommended implementation order
@@ -816,8 +865,11 @@ POST /api/v1/rag/search
 当前代码目录采用模块化 FastAPI 结构：
 
 ```text
-app/api/modules/
-  auth/       用户认证接口和服务
+src/translation_backend/app/api/modules/
+  auth/       认证模块（登录、当前用户和 user API key 子路由）
+    api_key/   当前用户自己的 API key 管理
+  project/    项目模块（项目资源和 project API key 子路由）
+    api_key/   用户 key 与项目的绑定管理
   health/     健康检查
   rag/        RAG 验证接口和 SDK 适配器
 ```
@@ -830,3 +882,318 @@ translation_memory/ suggestions/ qa/ jobs/ audit/
 ```
 
 每个模块建议包含 `routes.py`、`schemas.py`、`service.py`，跨模块共享的认证、权限、分页、错误和数据库能力放入 `app/core` 或 `app/api/shared`，避免路由直接操作 SDK、数据库或模型供应商。
+
+## 15. Translation workspace API additions
+
+本节补齐翻译设置、术语管理、任务创建和项目看板的前端所需契约。所有路由均相对于 `/api/v1`。这些接口是前后端的目标契约，**当前后端运行时尚未实现**；界面本地演示适配器不会请求这些 URL。
+
+除只读公开模板目录外，以下接口要求 Bearer access token，并在路由中校验项目成员身份。`owner` 与 `manager` 可管理项目配置、术语、版本、密钥、任务和报表；`translator` 可读取配置/术语、创建和读取翻译任务；`reviewer` 可读取任务和报表；`viewer` 只能读取其项目获准资源。资源不可见时返回 `404`，避免泄露其他项目的 ID。列表沿用 `page_size`（1..100，默认 20）、不透明 `cursor` 和 `{items,next_cursor,total}` 响应格式；可筛选的列表明确列出相应查询字段。
+
+所有写请求支持 `X-Request-ID`。可重试的创建、批量、导入、导出和任务写请求必须带 `Idempotency-Key`。配置更新使用 `If-Match: <revision>` 或请求体 `revision` 做乐观锁；冲突返回 `409 VERSION_CONFLICT` 并携带当前 revision。参数错误使用既有统一错误响应和 `422`。
+
+### 15.1 Translation settings
+
+#### GET `/projects/{project_id}/translation-settings`
+
+读取项目配置，translator 及以上角色可用。成功 `200`：
+
+```json
+{
+  "project_id": "project-123",
+  "revision": 12,
+  "worldview": "科幻 RPG 世界观摘要",
+  "tone": "中文自然、角色表达有辨识度",
+  "updated_at": "2026-09-24T03:00:00Z"
+}
+```
+
+#### PATCH `/projects/{project_id}/translation-settings`
+
+`owner`/`manager` 更新一个或多个可编辑字段；未提供字段保持不变。请求：
+
+```json
+{"revision": 12, "worldview": "新的世界观", "tone": "克制而明快"}
+```
+
+返回 `200` 的配置对象（revision 加一）。
+
+#### GET/POST `/projects/{project_id}/translation-settings/roles`
+
+GET 使用分页，可带 `q`；POST 新建角色。角色字段为 `{name,description,detailed_injection,sort_order}`。POST 返回 `201` 和 `{id,project_id,name,description,detailed_injection,revision,created_at,updated_at}`。
+
+#### GET/PATCH/DELETE `/projects/{project_id}/translation-settings/roles/{role_id}`
+
+GET 返回单个角色。PATCH 接受角色字段子集及 `revision`，返回更新角色；DELETE 返回 `204`。写入仅限 `owner`/`manager`。
+
+#### GET/POST `/projects/{project_id}/translation-settings/rules`
+
+规则列表支持 `type=general|category`、`category` 和 `q` 筛选。POST 请求 `{type,name,text,category?,enabled?}`，其中 `type=category` 时 `category` 必填；返回 `201` 规则对象，含 `id`、`revision` 和时间戳。
+
+#### PATCH/DELETE `/projects/{project_id}/translation-settings/rules/{rule_id}`
+
+PATCH 接受 `{revision,type?,name?,text?,category?,enabled?}`，返回更新规则；DELETE 返回 `204`。相同规则不得因重试而重复创建。
+
+#### GET/POST `/projects/{project_id}/translation-settings/culture-rules`
+
+列表支持 `language`、`q` 筛选。POST 请求 `{language,name,text,category?}`；成功 `201` 返回含稳定 `id` 与 `revision` 的文化规则对象。
+
+#### PATCH/DELETE `/projects/{project_id}/translation-settings/culture-rules/{rule_id}`
+
+PATCH 请求包含 `revision` 与需要修改的字段，返回完整规则对象；DELETE 返回 `204`。
+
+#### GET `/translation-templates`
+
+返回平台只读模板目录：`{"items":[{"id":"rpg","name":"游戏本地化 · RPG","description":"..."}]}`。不返回某项目的用户配置或密钥。
+
+#### POST `/projects/{project_id}/translation-settings/initialize`
+
+`owner`/`manager` 使用模板整体初始化项目设置，必须确认替换并发送 `Idempotency-Key`：
+
+```json
+{"template_id":"rpg","confirm_replace":true,"expected_revision":12}
+```
+
+未确认返回 `422 CONFIRMATION_REQUIRED`；revision 不一致返回 `409`。返回 `200` 完整新配置和递增后的 revision。该操作可审计，不得删除模板目录或项目成员。
+
+### 15.2 Terminology workflows
+
+#### POST `/projects/{project_id}/terminology-bases/{base_id}/terms/import`
+
+`owner`/`manager` 导入 CSV 或 JSON。小型内容请求可用 JSON `{format:"csv",content:"原文,en\\n星门,Star Gate",on_conflict:"update|skip|error"}`；文件上传可用 `multipart/form-data` 字段 `file`，并带 `Idempotency-Key`。同步完成返回 `200` `{created,updated,skipped,invalid_rows:[{row,code,message}]}`；需要后台处理返回 `202` `{job_id,status:"queued"}`。部分无效行不会静默丢弃，响应或 job result 必须保留原始行号和校验原因。
+
+#### POST `/projects/{project_id}/terminology-bases/{base_id}/terms/export`
+
+请求 `{format:"csv|json",language_codes?:["en","ko"],include_disabled:true,filters?:{q,category,required}}`，返回 `200` 文件流（`Content-Disposition` 含安全文件名），大数据集返回 `202` job。导出必须服从项目访问权限，不包含其他项目的条目。
+
+#### POST `/projects/{project_id}/terminology-bases/{base_id}/terms/bulk-action`
+
+`owner`/`manager` 批量操作请求 `{action:"delete|set_required|add_disabled_translation",term_ids:["term-1"],confirm:true,expected_revisions:{"term-1":3},value?:"deprecated term"}`。`term_ids` 限 1..100；破坏性 `delete` 必须 `confirm:true`。返回 `200` `{affected,items:[...]}`，超过 100 条应使用单独异步 job 设计而不是忽略记录。
+
+#### POST `/projects/{project_id}/terminology-bases/{base_id}/terms/clear`
+
+清空整个术语库的破坏性操作，仅 `owner` 可用。请求 `{confirm:true,expected_count:8745}`，必须提供 `Idempotency-Key` 和二次确认；计数不匹配返回 `409 COUNT_MISMATCH`。同步返回 `200` `{deleted:8745}`；规模超出同步阈值则 `202` 返回 job。服务端必须在一个事务或可恢复 job 中完成清空。
+
+#### POST `/projects/{project_id}/terminology/extract`
+
+从项目文件异步提取候选术语。请求 `{file_ids:["file-1"],source_language:"zh-CN",target_languages:["en","ko"],terminology_base_id:"base-1"}`。校验文件属于项目且语言匹配；成功 `202` 返回通用 job 对象，job `type=terminology_extract`。完成结果为 `{candidates:[{source,translations,category,confidence,source_file_id,segment_ids}]}`，默认不自动写入术语库，需用户审阅并通过导入接口提交。
+
+#### POST `/projects/{project_id}/terminology/mine`
+
+从项目 TM 异步挖掘候选术语。请求 `{tm_base_ids:["tm-1"],source_language:"zh-CN",target_languages:["en"],min_occurrences:2,terminology_base_id:"base-1"}`。成功 `202` 返回 `type=terminology_mine` 的通用 job；候选结果包含原文、译文、频次、来源 segment 与置信度，不自动覆盖已审核词条。
+
+### 15.3 Versions, files and provider keys
+
+#### GET/POST `/projects/{project_id}/versions`
+
+GET 支持 `q`、游标分页和 `sort=created_at|name`。POST（`owner`/`manager`）请求 `{name,description?,source_language?,target_languages?}`，返回 `201` `{id,project_id,name,description,created_at,created_by}`。同项目版本名称冲突返回 `409 VERSION_NAME_EXISTS`。
+
+#### GET `/projects/{project_id}/versions/{version_id}/files`
+
+返回该版本内可用源文件的分页 `{items:[{id,name,source_language,format,updated_at,size_bytes}],next_cursor,total}`。无版本文件时返回空列表而非 404；版本不属于当前项目时按资源不可见返回 `404`。
+
+#### GET/POST `/projects/{project_id}/api-keys`
+
+项目 API key 接口只管理“用户 key 与项目的绑定关系”，不保存、不接收也不返回 secret。仅 `owner`/`manager` 可管理绑定；项目成员只能看到当前项目已授权使用的脱敏 key 元数据。
+
+GET 返回项目绑定列表：
+
+```json
+{
+  "items": [
+    {
+      "id": "project-key-binding-456",
+      "api_key_id": "user-key-123",
+      "provider": "openai",
+      "label": "工作账号",
+      "masked_secret": "sk-proj-••••••••1234",
+      "status": "active",
+      "is_default": true,
+      "created_at": "2026-09-24T03:05:00Z"
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+```
+
+POST 将当前用户拥有的 key 绑定到项目，请求 `{api_key_id,is_default?}`。服务端必须校验该 key 属于当前用户、状态为 `active`，且调用方有权管理该项目；成功返回 `201` 绑定对象。绑定同一 key 的重试请求必须幂等；尝试绑定不属于当前用户的 key 返回 `404`，不得泄露其他用户的 key 是否存在。
+
+#### PATCH/DELETE `/projects/{project_id}/api-keys/{binding_id}`
+
+PATCH 只修改 `{status,is_default}`，同一项目最多一个 `is_default=true` 的绑定；DELETE 只解除项目绑定并返回 `204`，不会删除用户自己的 key。若绑定被活动翻译任务引用，删除返回 `409 API_KEY_IN_USE`。项目删除时绑定关系级联删除，但用户级 key 保留。
+
+API key secret 的安全要求适用于用户级 POST 和后端调用链路：生产环境只能通过 HTTPS/TLS 传输；服务端收到 secret 后必须在持久化前使用 AES-256-GCM 加密，只将密文、唯一 nonce/IV 和外部加密密钥版本写入数据库；AES 主密钥必须由数据库外的 KMS 或受控 secret manager 管理，并支持密钥轮换。仅在向 provider 发起请求前由受限后端短暂解密，任何响应、日志、审计、追踪、错误信息和导出均不得包含明文 secret。该方案是 TLS 加应用层静态加密，不是严格 E2E；后端代用户调用 provider 时必须能够解密。
+
+### 15.4 Translation tasks
+
+#### GET/POST `/projects/{project_id}/translation-tasks`
+
+GET 支持 `source_language`、`target_language`、`status=queued|translating|review|completed`、`version_id`、`q`、游标分页。POST（`owner`、`manager`、`translator`）请求：
+
+```json
+{
+  "name":"版本公告英韩翻译",
+  "source_language":"zh-CN",
+  "target_languages":["en","ko"],
+  "file_ids":["file-1","file-2"],
+  "project_api_key_id":"project-key-binding-456",
+  "version_id":"version-12"
+}
+```
+
+名称、至少一个目标语言、至少一个属于该项目且源语言一致的文件，以及有效项目 API key 绑定为必填；`version_id` 可省略。目标语言不能等于源语言，目标列表不得重复。任务只引用 `project_api_key_id`，返回项目绑定 ID 与脱敏的 provider/label，不返回用户 key 原文。请求须带 `Idempotency-Key`。成功 `201` 返回 `{id,project_id,name,source_language,target_languages,file_ids,version_id,project_api_key:{id,api_key_id,provider,label,masked_secret},status:"queued",progress:0,created_at}`。校验失败返回 `422` 字段错误。
+
+#### GET `/projects/{project_id}/translation-tasks/{task_id}`
+
+返回完整任务元数据、状态、进度、文件数、目标语言、版本和脱敏的模型凭据引用。状态定义为 `queued`、`translating`、`review`、`completed`、`failed`、`cancelled`；`progress` 范围 0..100。客户端不能通过 PATCH 任意伪造进度或越过工作流状态。
+
+### 15.5 Analytics
+
+#### 15.5.1 Token usage data model
+
+每次调用 AI provider 完成后写入一条不可变的 `ai_usage_records` 明细。该表是 token 用量和成本统计的唯一事实来源，当前不建立日聚合表；接口查询时按 `completed_at` 在 PostgreSQL 中聚合。
+
+核心字段如下：
+
+| 字段 | 类型/约束 | 说明 |
+| --- | --- | --- |
+| `id` | UUID 主键 | 用量事件 ID |
+| `user_id` | UUID，可空 | 用户 ID 快照，用户删除后仍保留历史统计 |
+| `project_id` | UUID，可空 | 项目 ID 快照；用户级调用为空 |
+| `api_key_id` | UUID，可空 | 用户 API key ID 快照，不使用会级联删除历史的外键 |
+| `project_api_key_binding_id` | UUID，可空 | 项目 API key 绑定 ID 快照 |
+| `provider` | string | 调用时的 provider 快照 |
+| `model` | string | 调用时的模型标识 |
+| `provider_request_id` | string，可空 | provider 请求 ID；与 `provider` 组合用于幂等去重 |
+| `status` | enum | `succeeded`、`failed`、`timeout` |
+| `input_tokens` | non-negative bigint | 输入 token 数 |
+| `output_tokens` | non-negative bigint | 输出 token 数 |
+| `cached_input_tokens` | non-negative bigint | 缓存命中的输入 token 数 |
+| `reasoning_tokens` | non-negative bigint | 推理 token 数，provider 未提供时为 0 |
+| `total_tokens` | non-negative bigint | 总 token 数，通常等于输入与输出等 provider 计费字段之和 |
+| `cost` | non-negative decimal(20,8) | 调用成本，不使用浮点数存储 |
+| `currency` | ISO 4217 string | 成本货币，默认 `USD` |
+| `started_at` | UTC timestamp，可空 | 调用开始时间 |
+| `completed_at` | UTC timestamp | 成功、失败或超时的完成时间，也是趋势分桶时间 |
+| `latency_ms` | integer，可空 | 调用耗时 |
+| `error_code` | string，可空 | 失败或超时错误码，成功时为空 |
+
+明细表不得保存 prompt、completion、secret 或其他模型输入输出原文。建议建立 `(user_id, completed_at)`、`(project_id, completed_at)`、`(api_key_id, completed_at)`、`(provider, model, completed_at)` 索引，并按 `completed_at` 范围查询。数据量达到较大规模后，可对明细表按月分区或增加物化视图，但不改变本 API 契约。
+
+#### 15.5.2 GET `/auth/me/analytics/usage`
+
+返回当前用户所有 API key 的用量总览。只允许访问当前用户自己的统计；支持以下查询参数：
+
+```text
+range=7d|30d                    # 与 from/to 二选一，默认 7d
+from=2026-09-18T00:00:00Z      # 闭区间起点
+to=2026-09-24T23:59:59Z        # 闭区间终点
+timezone=Asia/Shanghai          # 趋势分桶时区，默认 UTC
+granularity=day|hour            # 默认 day；hour 最多查询 7 天
+api_key_id=user-key-123         # 可选
+project_id=project-123          # 可选
+provider=openai                 # 可选
+model=gpt-5.6-luna              # 可选
+```
+
+`day` 粒度最多查询 31 天；服务端必须拒绝超出范围的请求，避免无界扫描。成功 `200`：
+
+```json
+{
+  "range": {
+    "from": "2026-09-18T00:00:00Z",
+    "to": "2026-09-24T23:59:59Z",
+    "timezone": "Asia/Shanghai",
+    "granularity": "day"
+  },
+  "totals": {
+    "call_count": 13917,
+    "success_count": 13880,
+    "failure_count": 37,
+    "input_tokens": 10655434,
+    "output_tokens": 852591,
+    "cached_input_tokens": 120000,
+    "reasoning_tokens": 62000,
+    "total_tokens": 11508025,
+    "cost": "57.40800000",
+    "currency": "USD"
+  },
+  "trend": [
+    {
+      "bucket_start": "2026-09-20T00:00:00+08:00",
+      "calls": 180,
+      "success_calls": 178,
+      "failed_calls": 2,
+      "input_tokens": 82000,
+      "output_tokens": 15000,
+      "total_tokens": 97000,
+      "cost": "4.29000000",
+      "currency": "USD"
+    }
+  ],
+  "by_api_key": [
+    {
+      "api_key_id": "user-key-123",
+      "provider": "openai",
+      "label": "工作账号",
+      "masked_secret": "sk-proj-••••••••1234",
+      "calls": 13619,
+      "input_tokens": 10593413,
+      "output_tokens": 805997,
+      "total_tokens": 11399410,
+      "cost": "57.34500000",
+      "currency": "USD"
+    }
+  ],
+  "by_model": [
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-luna",
+      "calls": 13619,
+      "input_tokens": 10593413,
+      "output_tokens": 805997,
+      "total_tokens": 11399410,
+      "cost": "57.34500000",
+      "share": 0.9989,
+      "currency": "USD"
+    }
+  ]
+}
+```
+
+`trend` 必须按时间升序返回，并补齐没有调用的日期或小时为 0，供前端绘制 token/cost 双轴折线图。`totals` 包含成功、失败和超时记录；若 provider 对失败请求返回了部分用量，应保留对应 token 和 cost。成本字段以字符串返回，避免前端浮点精度丢失。
+
+#### 15.5.3 GET `/projects/{project_id}/analytics/usage`
+
+返回当前项目的 token 用量总览，权限遵循项目报表读取权限。除 `range`、`from`、`to`、`timezone`、`granularity`、`provider`、`model` 外，支持：
+
+```text
+project_api_key_id=project-key-binding-456
+api_key_id=user-key-123
+```
+
+服务端必须校验筛选的 key 属于该项目的绑定关系，不能通过参数探测其他项目或用户的 key。响应结构与 `/auth/me/analytics/usage` 相同，但 `by_api_key` 只包含该项目绑定且在查询范围内产生调用的 key。
+
+前端可使用 `totals` 渲染顶部指标卡，使用 `trend` 绘制“每日用量与成本”双轴折线图，使用 `by_model` 或 `by_api_key` 渲染明细表。图表示例中的数值仅为展示数据，不属于接口固定值。
+
+#### 15.5.4 Redis usage and caching boundary
+
+Redis 不是用量事实来源，也不是必需依赖。调用完成后应先将 `ai_usage_records` 写入 PostgreSQL，再由查询接口按时间聚合。
+
+当统计查询频繁或明细量较大时，可以使用 Redis 缓存聚合响应：
+
+- 缓存 key 必须包含用户或项目 ID、完整筛选条件、时间范围、时区和粒度；
+- TTL 建议 30 至 120 秒，允许图表出现短暂延迟；
+- 新增明细后可删除相关用户/项目缓存，也可以接受 TTL 内的最终一致性；
+- Redis 不得替代 PostgreSQL 明细，不得只把 token 增量写入 Redis 后丢弃明细；
+- Redis 不可用时接口应回退到 PostgreSQL 查询，不影响用量记录的写入。
+
+如果未来单表查询无法满足性能要求，优先考虑 `completed_at` 分区或 PostgreSQL 物化视图；增加日聚合表属于后续性能优化，不是当前 API 的必要组成部分。
+
+#### GET `/projects/{project_id}/analytics/translation-report`
+
+筛选参数：`from`、`to`（闭区间 ISO 日期）、`target_language`、`status`。返回 `200` `{filters:{...},summary:{task_count,translated_words},daily:[{date,task_count,translated_words}]}`。无记录时返回零汇总与空 `daily`。过滤只影响当前项目，并且统计的 `translated_words` 定义以服务端实现统一采用的词数策略为准；计数不应伪装成模型调用或 token 用量。
+
+### 15.6 Runtime boundary
+
+以上新增路径是 API 契约，不表示当前 FastAPI 已具备相应 handler、数据库表、任务队列、AI 服务或聚合查询。部署前必须分别实现后端路由/schema/service、项目权限、迁移与后台 job，并用 HTTP 集成测试逐路由验证；仅文档检查或本地演示适配器测试不构成后端可用性证明。

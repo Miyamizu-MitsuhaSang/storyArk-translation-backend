@@ -3,7 +3,7 @@ from typing import Any
 
 from tortoise import fields
 
-from models.base import TimestampedModel
+from app.models import TimestampedModel
 
 PROJECT_STATUSES = ("draft", "active", "archived")
 PROJECT_MEMBER_ROLES = ("owner", "manager", "translator", "reviewer", "viewer")
@@ -99,6 +99,36 @@ class ProjectLanguagePair(TimestampedModel):
         table = "project_language_pairs"
         unique_together = (("project", "source_language", "target_language"),)
         indexes = [("project_id", "is_active")]
+
+
+PROJECT_API_KEY_STATUSES = ("active", "inactive")
+
+
+class ProjectApiKeyBinding(TimestampedModel):
+    project = fields.ForeignKeyField(
+        "models.Project",
+        related_name="api_key_bindings",
+        on_delete=fields.CASCADE,
+        description="项目 API key 绑定所属项目；项目删除时一并删除绑定关系。",
+    )
+    api_key = fields.ForeignKeyField(
+        "models.AIProviderCredential",
+        related_name="project_bindings",
+        on_delete=fields.CASCADE,
+        description="绑定的用户级 API key；解除绑定不删除用户级 key。",
+    )
+    status = fields.CharField(
+        max_length=16,
+        default="active",
+        choices=PROJECT_API_KEY_STATUSES,
+        description="项目绑定状态：active 可用于项目调用、inactive 暂停使用。",
+    )
+    is_default = fields.BooleanField(default=False, description="该绑定是否为项目默认 API key。")
+
+    class Meta:
+        table = "project_api_key_bindings"
+        unique_together = (("project", "api_key"),)
+        indexes = [("project_id", "status"), ("project_id", "is_default")]
 
 
 class Worldview(TimestampedModel):

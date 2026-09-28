@@ -4,11 +4,15 @@ import uvicorn
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
-from app.api.modules.auth.routes import register_auth_exception_handler
-from app.api.modules.router import api_router
-from app.core.config import app_settings, database_settings
-from app.core.database import TORTOISE_ORM
-from app.core.logging import configure_logging, install_request_logging
+from translation_backend.app.api.modules.auth.routes import register_auth_exception_handler
+from translation_backend.app.api.modules.auth.api_key.routes import register_api_key_exception_handler
+from translation_backend.app.api.modules.health import health
+from translation_backend.app.api.modules.project.routes import register_project_exception_handler
+from translation_backend.app.api.modules.project.api_key.routes import register_project_api_key_exception_handler
+from translation_backend.app.api.router import api_router
+from translation_backend.app.core.config import app_settings, database_settings
+from translation_backend.app.core.database import TORTOISE_ORM
+from translation_backend.app.core.logging import configure_logging, install_request_logging
 from tortoise import Tortoise
 
 
@@ -16,7 +20,7 @@ from tortoise import Tortoise
 async def lifespan(app: FastAPI):
     await Tortoise.init(config=TORTOISE_ORM)
     if database_settings.redis_launch is True:
-        from app.core.redis import close_redis, init_redis
+        from translation_backend.app.core.redis import close_redis, init_redis
 
         app.state.redis = await init_redis()
     else:
@@ -47,7 +51,14 @@ app.add_middleware(
 )
 
 app.include_router(api_router, tags=["API Starter"])
+app.include_router(health.health_router)
+
+# 注册认证模块异常处理器，将 AuthError 转换为统一的认证错误响应。
 register_auth_exception_handler(app)
+register_api_key_exception_handler(app)
+# 注册项目模块异常处理器，将 ProjectError 转换为统一的项目错误响应。
+register_project_exception_handler(app)
+register_project_api_key_exception_handler(app)
 
 if __name__ == '__main__':
     uvicorn.run(app, host="127.0.0.1", port=8000, workers=2, reload=True)

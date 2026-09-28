@@ -10,6 +10,7 @@ dependencies = [
     "pydantic-settings>=2.10.0",
     "pwdlib[argon2]>=0.2.1",
     "asyncpg>=0.30.0",
+    "cryptography>=44.0.0",
     "tortoise-orm>=0.25.1",
     "translate-manager-rag",
     "uvicorn[standard]>=0.35.0",
@@ -21,12 +22,12 @@ dev = [
 ]
 
 [tool.uv.sources]
-translate-manager-rag = { git = "https://github.com/Miyamizu-MitsuhaSang/storyArk-rag-sdk.git", branch = "main" }
+translate-manager-rag = { path = "../../packages/translate-manager-rag", editable = true }
 
 [build-system]
 requires = ["setuptools>=75.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["app*", "models*"]
+where = [".."]
+include = ["translation_backend*"]

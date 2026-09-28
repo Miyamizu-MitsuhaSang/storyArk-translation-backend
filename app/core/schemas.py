@@ -18,6 +18,7 @@ class RagDocument(BaseModel):
 
 
 class RagIndexRequest(BaseModel):
+    project_id: str = Field(default="default", min_length=1)
     num_features: int = Field(gt=0)
     documents: list[RagDocument]
 
@@ -28,6 +29,7 @@ class RagIndexResponse(BaseModel):
 
 
 class RagSearchRequest(BaseModel):
+    project_id: str = Field(default="default", min_length=1)
     query: SparseVector
     top_k: int = Field(default=5, gt=0)
 

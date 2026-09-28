@@ -2,7 +2,7 @@ from datetime import datetime
 
 from tortoise import fields
 
-from models.base import TimestampedModel
+from app.models import TimestampedModel
 
 
 class User(TimestampedModel):
