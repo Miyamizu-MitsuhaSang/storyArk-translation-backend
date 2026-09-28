@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, Query, Request
 from starlette.responses import JSONResponse, Response
 from uuid import UUID
 
-from .schemas import (
+from .....application.project.api_key.schemas import (
     CreateProjectApiKeyRequest,
     ProjectApiKeyPage,
     ProjectApiKeyResponse,
     UpdateProjectApiKeyRequest,
 )
-from .service import (
+from .....application.project.api_key.service import (
     ProjectApiKeyError,
     ProjectApiKeyService,
 )

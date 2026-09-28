@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request
 from starlette.responses import JSONResponse, Response
 
-from .auth_schemas import (
+from ....application.auth.schemas import (
     ChangePasswordRequest,
     ErrorResponse,
     LoginRequest,
@@ -9,7 +9,7 @@ from .auth_schemas import (
     RefreshRequest,
     TokenResponse,
 )
-from .service import AuthError, AuthService
+from ....application.auth.service import AuthError, AuthService
 from ....core.security import (
     get_auth_service,
     get_current_user,

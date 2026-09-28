@@ -1,25 +1,22 @@
-"""Compatibility exports for authentication API contracts."""
+"""Authentication business services and contracts."""
 
-from ....application.auth.schemas import (
+from .schemas import (
     ChangePasswordRequest,
-    ErrorBody,
     ErrorResponse,
     LoginRequest,
     MeResponse,
-    ProjectSummary,
     RefreshRequest,
     TokenResponse,
-    UserResponse,
 )
+from .service import AuthError, AuthService
 
 __all__ = [
+    "AuthError",
+    "AuthService",
     "ChangePasswordRequest",
-    "ErrorBody",
     "ErrorResponse",
     "LoginRequest",
     "MeResponse",
-    "ProjectSummary",
     "RefreshRequest",
     "TokenResponse",
-    "UserResponse",
 ]

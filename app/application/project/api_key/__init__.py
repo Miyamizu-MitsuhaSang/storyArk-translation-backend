@@ -1,6 +1,6 @@
-"""Compatibility exports for the project API key application service."""
+"""Project API key binding use cases and contracts."""
 
-from .....application.project.api_key.service import (
+from .service import (
     ProjectApiKeyConflictError,
     ProjectApiKeyError,
     ProjectApiKeyForbiddenError,

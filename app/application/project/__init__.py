@@ -1,6 +1,6 @@
-"""Compatibility exports for the project application service."""
+"""Project management business services and contracts."""
 
-from ....application.project.service import (
+from .service import (
     ProjectConflictError,
     ProjectError,
     ProjectForbiddenError,

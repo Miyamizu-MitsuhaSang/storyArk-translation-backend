@@ -2,14 +2,14 @@ from fastapi import APIRouter, Depends, Query, Request
 from starlette.responses import JSONResponse, Response
 from uuid import UUID
 
-from .schemas import (
+from .....application.auth.api_key.schemas import (
     ApiKeyPage,
     ApiKeyResponse,
     CreatedApiKeyResponse,
     CreateApiKeyRequest,
     UpdateApiKeyRequest,
 )
-from .service import ApiKeyError, ApiKeyService
+from .....application.auth.api_key.service import ApiKeyError, ApiKeyService
 from .....core.security import get_api_key_service, get_current_user
 from .....models import User
 

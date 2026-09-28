@@ -1,6 +1,6 @@
-"""Compatibility exports for the user API key application service."""
+"""User-owned provider API key use cases and contracts."""
 
-from .....application.auth.api_key.service import (
+from .service import (
     ApiKeyEncryptionUnavailableError,
     ApiKeyError,
     ApiKeyInUseError,

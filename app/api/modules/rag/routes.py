@@ -6,7 +6,7 @@ from ....core.schemas import (
     RagSearchRequest,
     RagSearchResponse,
 )
-from .service import (
+from ....application.rag.service import (
     RagIndexNotBuiltError,
     RagService,
     get_rag_service as get_service,

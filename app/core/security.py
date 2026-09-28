@@ -3,8 +3,8 @@
 from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
 
-from ..api.modules.auth.api_key.service import ApiKeyService
-from ..api.modules.auth.service import AuthError, AuthService
+from ..application.auth.api_key.service import ApiKeyService
+from ..application.auth.service import AuthError, AuthService
 from .config import app_settings
 from ..models import User
 

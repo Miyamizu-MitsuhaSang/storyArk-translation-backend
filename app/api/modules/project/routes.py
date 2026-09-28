@@ -6,7 +6,7 @@ from uuid import UUID
 
 from .api_key.routes import project_api_key_router
 from ....core.security import get_current_user
-from .schemas import (
+from ....application.project.schemas import (
     AddMemberRequest,
     CreateProjectRequest,
     LanguagePairListQuery,
@@ -22,7 +22,7 @@ from .schemas import (
     UpdateMemberRequest,
     UpdateProjectRequest,
 )
-from .service import ProjectError, ProjectService
+from ....application.project.service import ProjectError, ProjectService
 from ....models import User
 
 
