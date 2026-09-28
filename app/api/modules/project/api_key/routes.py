@@ -2,18 +2,18 @@ from fastapi import APIRouter, Depends, Query, Request
 from starlette.responses import JSONResponse, Response
 from uuid import UUID
 
-from translation_backend.app.api.modules.project.api_key.schemas import (
+from .schemas import (
     CreateProjectApiKeyRequest,
     ProjectApiKeyPage,
     ProjectApiKeyResponse,
     UpdateProjectApiKeyRequest,
 )
-from translation_backend.app.api.modules.project.api_key.service import (
+from .service import (
     ProjectApiKeyError,
     ProjectApiKeyService,
 )
-from translation_backend.app.core.security import get_current_user
-from app.models import User
+from .....core.security import get_current_user
+from .....models import User
 
 project_api_key_router = APIRouter(tags=["project-api-keys"])
 _project_api_key_service = ProjectApiKeyService()

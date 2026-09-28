@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request
 from starlette.responses import JSONResponse, Response
 
-from translation_backend.app.api.modules.auth.auth_schemas import (
+from .auth_schemas import (
     ChangePasswordRequest,
     ErrorResponse,
     LoginRequest,
@@ -9,12 +9,13 @@ from translation_backend.app.api.modules.auth.auth_schemas import (
     RefreshRequest,
     TokenResponse,
 )
-from translation_backend.app.application.auth.service import AuthError, AuthService
-from translation_backend.app.core.security import (
+from .service import AuthError, AuthService
+from ....core.security import (
     get_auth_service,
     get_current_user,
+    oauth2_scheme,
 )
-from app.models import User
+from ....models import User
 
 
 auth_router = APIRouter()
@@ -86,6 +87,6 @@ async def change_password(
     return Response(status_code=204)
 
 
-from translation_backend.app.api.modules.auth.api_key.routes import user_api_router
+from .api_key.routes import user_api_router
 
 auth_router.include_router(user_api_router)

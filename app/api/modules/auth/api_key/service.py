@@ -5,13 +5,13 @@ import os
 from uuid import UUID
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from translation_backend.app.api.modules.auth.api_key.schemas import (
+from .schemas import (
     ApiKeyPage,
     ApiKeyResponse,
     CreateApiKeyRequest,
     UpdateApiKeyRequest,
 )
-from app.models import AIProviderCredential, User
+from .....models import AIProviderCredential, User
 
 
 class ApiKeyError(Exception):
@@ -139,7 +139,7 @@ class ApiKeyService:
 
     @staticmethod
     def _load_key_from_settings() -> bytes:
-        from translation_backend.app.core.config import security_settings
+        from .....core.config import security_settings
 
         raw = security_settings.auth_api_key_encryption_key
         if not raw:
@@ -154,6 +154,6 @@ class ApiKeyService:
 
     @staticmethod
     def _load_key_version() -> str:
-        from translation_backend.app.core.config import security_settings
+        from .....core.config import security_settings
 
         return security_settings.auth_api_key_encryption_key_version

@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, Request
 from starlette.responses import JSONResponse, Response
 from uuid import UUID
 
-from translation_backend.app.api.modules.project.api_key.routes import project_api_key_router
-from translation_backend.app.core.security import get_current_user
-from translation_backend.app.api.modules.project.schemas import (
+from .api_key.routes import project_api_key_router
+from ....core.security import get_current_user
+from .schemas import (
     AddMemberRequest,
     CreateProjectRequest,
     LanguagePairListQuery,
@@ -22,8 +22,8 @@ from translation_backend.app.api.modules.project.schemas import (
     UpdateMemberRequest,
     UpdateProjectRequest,
 )
-from translation_backend.app.application.project.service import ProjectError, ProjectService
-from app.models import User
+from .service import ProjectError, ProjectService
+from ....models import User
 
 
 project_router = APIRouter(prefix="/projects", tags=["projects"])

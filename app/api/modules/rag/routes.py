@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from translation_backend.app.core.schemas import (
+from ....core.schemas import (
     RagIndexRequest,
     RagIndexResponse,
     RagSearchRequest,
     RagSearchResponse,
 )
-from translation_backend.app.application.rag.service import (
+from .service import (
     RagIndexNotBuiltError,
     RagService,
     get_rag_service as get_service,

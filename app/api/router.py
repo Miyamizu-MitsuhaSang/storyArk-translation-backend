@@ -2,10 +2,10 @@
 
 from fastapi import APIRouter
 
-from translation_backend.app.api.modules.auth.routes import auth_router
-from translation_backend.app.api.modules.project.routes import project_router
-from translation_backend.app.api.modules.rag.routes import router as rag_router
-from translation_backend.app.core.config import app_settings
+from .modules.auth.routes import auth_router
+from .modules.project.routes import project_router
+from .modules.rag.routes import router as rag_router
+from ..core.config import app_settings
 
 
 api_router = APIRouter(prefix=app_settings.api_prefix)

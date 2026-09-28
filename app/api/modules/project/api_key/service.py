@@ -6,13 +6,13 @@ from uuid import UUID
 
 from tortoise.exceptions import IntegrityError
 
-from translation_backend.app.api.modules.project.api_key.schemas import (
+from .schemas import (
     CreateProjectApiKeyRequest,
     ProjectApiKeyPage,
     ProjectApiKeyResponse,
     UpdateProjectApiKeyRequest,
 )
-from app.models import AIProviderCredential, Project, ProjectApiKeyBinding, ProjectMember, User
+from .....models import AIProviderCredential, Project, ProjectApiKeyBinding, ProjectMember, User
 
 
 MANAGER_ROLES = {"owner", "manager"}

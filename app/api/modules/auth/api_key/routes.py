@@ -2,16 +2,16 @@ from fastapi import APIRouter, Depends, Query, Request
 from starlette.responses import JSONResponse, Response
 from uuid import UUID
 
-from translation_backend.app.api.modules.auth.api_key.schemas import (
+from .schemas import (
     ApiKeyPage,
     ApiKeyResponse,
     CreatedApiKeyResponse,
     CreateApiKeyRequest,
     UpdateApiKeyRequest,
 )
-from translation_backend.app.api.modules.auth.api_key.service import ApiKeyError, ApiKeyService
-from translation_backend.app.core.security import get_api_key_service, get_current_user
-from app.models import User
+from .service import ApiKeyError, ApiKeyService
+from .....core.security import get_api_key_service, get_current_user
+from .....models import User
 
 
 user_api_router = APIRouter(prefix="/me/api-keys", tags=["auth-api-keys"])

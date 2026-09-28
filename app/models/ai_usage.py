@@ -1,6 +1,6 @@
 from tortoise import fields
 
-from app.models import TimestampedModel
+from .base import TimestampedModel
 
 AI_USAGE_STATUSES = ("succeeded", "failed", "timeout")
 

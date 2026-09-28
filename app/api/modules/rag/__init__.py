@@ -1,4 +1,4 @@
-from translation_backend.app.api.modules.rag.service import (
+from .service import (
     ProjectId,
     RagIndexNotBuiltError,
     RagService,

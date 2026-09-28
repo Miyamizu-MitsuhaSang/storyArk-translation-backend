@@ -3,10 +3,10 @@
 from fastapi import Depends
 from fastapi.security import OAuth2PasswordBearer
 
-from translation_backend.app.api.modules.auth.api_key.service import ApiKeyService
-from translation_backend.app.application.auth.service import AuthError, AuthService
-from translation_backend.app.core.config import app_settings
-from app.models import User
+from ..api.modules.auth.api_key.service import ApiKeyService
+from ..api.modules.auth.service import AuthError, AuthService
+from .config import app_settings
+from ..models import User
 
 
 oauth2_scheme = OAuth2PasswordBearer(
