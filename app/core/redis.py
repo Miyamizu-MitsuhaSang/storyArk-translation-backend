@@ -10,13 +10,14 @@ redis_client: Optional[redis.Redis] = None
 async def init_redis():
     global redis_client
     if redis_client is None:
-        redis_client = redis.Redis(
-            host="127.0.0.1",
-            port=6379,
-            decode_responses=True,  # 返回 str 而不是 Bytes
-        )
-    await redis_client.ping()
-
+        from .config import database_settings
+        redis_client = redis.from_url(database_settings.redis_url, decode_responses=True)
+    try:
+        await redis_client.ping()
+    except Exception:
+        # Redis is an optional acceleration layer; callers continue on PostgreSQL.
+        redis_client = None
+        return None
     return redis_client
 
 

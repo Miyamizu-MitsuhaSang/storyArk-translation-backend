@@ -12,6 +12,10 @@ class AppSettings(BaseSettings):
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
     log_file_path: Path | None = None
+    tm_cache_enabled: bool = False
+    tm_cache_ttl_seconds: int = 60
+    tm_search_max_text_length: int = 4096
+    tm_search_max_page_size: int = 50
     model_config = SettingsConfigDict(
         # env_prefix="TRANSLATION_",
         env_file=ENV_FILE_DIR / ".env.app",
@@ -38,6 +42,7 @@ class SecuritySettings(BaseSettings):
 
 class DatabaseSettings(BaseSettings):
     redis_launch: bool = False
+    redis_url: str = "redis://127.0.0.1:6379/2"
 
     db_user: str = "postgres"
     db_password: str = "postgres"
@@ -60,9 +65,30 @@ class DatabaseSettings(BaseSettings):
         )
 
 
+class CelerySettings(BaseSettings):
+    """Celery transport and serialization settings."""
+
+    broker_url: str = "redis://127.0.0.1:6379/0"
+    result_backend: str = "redis://127.0.0.1:6379/1"
+    task_always_eager: bool = False
+    task_eager_propagates: bool = True
+    task_serializer: str = "json"
+    result_serializer: str = "json"
+    accept_content: list[str] = ["json"]
+    timezone: str = "UTC"
+    enable_utc: bool = True
+
+    model_config = SettingsConfigDict(
+        env_file=ENV_FILE_DIR / ".env.app",
+        env_prefix="CELERY_",
+        extra="ignore",
+    )
+
+
 app_settings = AppSettings()
 security_settings = SecuritySettings()
 database_settings = DatabaseSettings()
+celery_settings = CelerySettings()
 
 if __name__ == '__main__':
     print(ENV_FILE_DIR)

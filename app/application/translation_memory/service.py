@@ -4,7 +4,8 @@ import base64
 import hashlib
 import json
 from datetime import datetime, timezone
-from uuid import UUID
+from typing import Iterable
+from uuid import UUID, uuid4
 
 from tortoise import transactions
 from tortoise.exceptions import IntegrityError
@@ -13,10 +14,14 @@ from ...models import (
     TranslationMemoryEntry,
     TranslationMemoryEntryRevision,
     TranslationMemoryLibrary,
+    TranslationMemoryEntrySource,
+    TranslationMemoryImport,
+    ProjectLanguagePair,
     User,
 )
 from ...domain.translation_memory.policies import can_write_library
 from .schemas import (
+    EffectiveTranslationMemoryScope,
     TranslationMemoryEntryCreateRequest,
     TranslationMemoryEntryPage,
     TranslationMemoryEntryResponse,
@@ -24,7 +29,19 @@ from .schemas import (
     TranslationMemoryLibraryPage,
     TranslationMemoryLibraryResponse,
     TranslationMemoryLibraryUpdateRequest,
+    TranslationMemorySearchRequest,
+    TranslationMemorySearchResponse,
+    TranslationMemoryImportRow,
+    TranslationMemoryImportResult,
+    JobReference,
 )
+from ...infrastructure.translation_memory.search_index import TranslationMemorySearchIndex, build_effective_scope, source_hash
+from ...infrastructure.translation_memory.cache import NoopTranslationMemoryCache, RedisTranslationMemoryCache, TranslationMemoryCache, build_search_cache_key, cache_get, cache_set
+from ...core import redis as redis_module
+from ...core.config import app_settings
+from ...application.project.service import ProjectForbiddenError, ProjectNotFoundError
+from ...repositories import ProjectRepository
+from ...models import ProjectMember
 
 
 class TranslationMemoryError(Exception):
@@ -46,7 +63,75 @@ class TranslationMemoryCursorError(TranslationMemoryError):
     code = "TRANSLATION_MEMORY_INVALID_CURSOR"
 
 
+class TranslationMemoryIndexUnavailableError(TranslationMemoryError):
+    status_code = 503
+    code = "INDEX_NOT_AVAILABLE"
+
+
 class TranslationMemoryService:
+    IMPORT_SYNC_LIMIT = 100
+    def __init__(self, *, search_index: TranslationMemorySearchIndex | None = None, cache: TranslationMemoryCache | None = None) -> None:
+        self._search_index = search_index or TranslationMemorySearchIndex()
+        if cache is not None:
+            self._cache = cache
+        elif app_settings.tm_cache_enabled and redis_module.redis_client is not None:
+            self._cache = RedisTranslationMemoryCache(redis_module.redis_client)
+        else:
+            self._cache = NoopTranslationMemoryCache()
+        self._projects = ProjectRepository()
+
+    async def _ensure_project_member(self, user: User, project_id: UUID) -> ProjectMember:
+        membership = await self._projects.find_membership(project_id, user.id)
+        if membership is None:
+            raise ProjectNotFoundError("项目不存在或当前用户不可见")
+        return membership
+
+    async def list_effective_libraries(self, user: User, project_id: UUID):
+        await self._ensure_project_member(user, project_id)
+        scope = await build_effective_scope(user.id)
+        items = []
+        for item in scope:
+            library = await TranslationMemoryLibrary.get(id=item.library_id)
+            response = self._library_response(library)
+            response.priority = item.priority
+            response.entry_count = item.entry_count
+            response.language_pairs = item.language_pairs
+            items.append(response)
+        return TranslationMemoryLibraryPage(
+            items=items,
+            next_cursor=None,
+            total=len(scope),
+        )
+
+    async def search(self, user: User, project_id: UUID, request: TranslationMemorySearchRequest) -> TranslationMemorySearchResponse:
+        await self._ensure_project_member(user, project_id)
+        scope = await build_effective_scope(user.id)
+        key = build_search_cache_key(
+            request,
+            user_id=user.id,
+            project_id=project_id,
+            library_versions={item.library_id: item.content_version for item in scope},
+        )
+        try:
+            cached = await cache_get(self._cache, key)
+            if cached:
+                return TranslationMemorySearchResponse.model_validate_json(cached)
+        except Exception:
+            pass
+        matches = await self._search_index.search(scope, request)
+        response = TranslationMemorySearchResponse(items=matches, total=len(matches), source_hash=source_hash(request.source_text))
+        try:
+            await cache_set(self._cache, key, response.model_dump_json(), app_settings.tm_cache_ttl_seconds)
+        except Exception:
+            pass
+        return response
+
+    async def reindex(self, user: User, project_id: UUID):
+        await self._ensure_project_member(user, project_id)
+        scope = await build_effective_scope(user.id)
+        if not scope:
+            raise TranslationMemoryIndexUnavailableError("没有可重建的翻译记忆库")
+        return self._search_index.enqueue_rebuild(scope[0].library_id, scope[0].content_version)
     async def get_or_create_user_library(self, user: User) -> TranslationMemoryLibrary:
         library = await TranslationMemoryLibrary.filter(scope="user", owner_user_id=user.id, status="active").first()
         if library:
@@ -62,6 +147,7 @@ class TranslationMemoryService:
             return library
 
     async def list_user_libraries(self, user: User, page_size: int, cursor: str | None) -> TranslationMemoryLibraryPage:
+        page_size = max(1, min(page_size, app_settings.tm_search_max_page_size))
         offset = self._decode_cursor(cursor)
         query = TranslationMemoryLibrary.filter(scope="user", owner_user_id=user.id).order_by("created_at", "id")
         total = await query.count()
@@ -90,6 +176,7 @@ class TranslationMemoryService:
         return library
 
     async def list_entries(self, user: User, memory_id: UUID, *, page_size: int = 20, cursor: str | None = None) -> TranslationMemoryEntryPage:
+        page_size = max(1, min(page_size, app_settings.tm_search_max_page_size))
         library = await self.get_user_library(user, memory_id)
         offset = self._decode_cursor(cursor)
         query = TranslationMemoryEntry.filter(library_id=library.id, status="active", deleted_at=None).order_by("created_at", "id")
@@ -127,6 +214,161 @@ class TranslationMemoryService:
                 library.content_version += 1
                 await library.save(update_fields=["content_version"])
         return self._entry_response(entry)
+
+    async def upsert_confirmed_segment(
+        self,
+        user: User,
+        project_id: UUID,
+        document_id: UUID | None,
+        segment_id: UUID,
+        source_language: str | None,
+        target_language: str | None,
+        source_text: str,
+        target_text: str,
+    ) -> TranslationMemoryEntry:
+        """Write a confirmed segment to the user's TM and retain source provenance."""
+        await self._ensure_project_member(user, project_id)
+        if not source_language or not target_language:
+            pair = await ProjectLanguagePair.filter(project_id=project_id, is_active=True).order_by("id").first()
+            source_language = source_language or (pair.source_language if pair else "und")
+            target_language = target_language or (pair.target_language if pair else "und")
+        library = await self.get_or_create_user_library(user)
+        source_digest = self._hash(source_text)
+        target_digest = self._hash(target_text)
+        async with transactions.in_transaction():
+            library = await TranslationMemoryLibrary.filter(id=library.id).select_for_update().get()
+            entry = await TranslationMemoryEntry.filter(
+                library_id=library.id,
+                source_language=source_language,
+                target_language=target_language,
+                source_hash=source_digest,
+                target_hash=target_digest,
+            ).first()
+            if entry is None:
+                entry = await TranslationMemoryEntry.create(
+                    library=library,
+                    source_language=source_language,
+                    target_language=target_language,
+                    source_text=source_text,
+                    target_text=target_text,
+                    source_hash=source_digest,
+                    target_hash=target_digest,
+                    origin="confirmed_segment",
+                    metadata={},
+                )
+                await self._record_revision(entry, user, "确认 segment 写入翻译记忆")
+                library.content_version += 1
+                await library.save(update_fields=["content_version"])
+            source = await TranslationMemoryEntrySource.filter(
+                entry_id=entry.id,
+                user_id=user.id,
+                project_id=project_id,
+                document_id=document_id,
+                segment_id=segment_id,
+            ).first()
+            if source is None:
+                await TranslationMemoryEntrySource.create(
+                    entry=entry,
+                    user_id=user.id,
+                    project_id=project_id,
+                    document_id=document_id,
+                    segment_id=segment_id,
+                )
+            else:
+                # save() refreshes updated_at, providing last_seen_at semantics.
+                await source.save()
+        return entry
+
+    async def import_entries(
+        self,
+        user: User,
+        memory_id: UUID,
+        rows: Iterable[TranslationMemoryImportRow],
+        idempotency_key: str,
+        *,
+        _ignore_existing: bool = False,
+    ) -> TranslationMemoryImportResult:
+        """Import a bounded user batch, retaining every validation error's row number."""
+        library = await self.get_user_library(user, memory_id)
+        if not can_write_library(user, library):
+            raise TranslationMemoryConflictError("翻译记忆库不可写入")
+        if not idempotency_key.strip():
+            raise TranslationMemoryConflictError("幂等键不能为空")
+        materialized = list(rows)
+        if len(materialized) > self.IMPORT_SYNC_LIMIT:
+            from ...tasks.translation_memory import TranslationMemoryTaskDispatcher
+            import_id = uuid4()
+            async with transactions.in_transaction():
+                locked = await TranslationMemoryLibrary.filter(id=library.id).select_for_update().get()
+                existing = await TranslationMemoryImport.filter(
+                    library_id=locked.id, user_id=user.id, idempotency_key=idempotency_key,
+                ).first()
+                if existing is not None:
+                    return TranslationMemoryImportResult(
+                        imported=existing.imported, skipped=existing.skipped,
+                        invalid_rows=existing.invalid_rows,
+                        job=JobReference(job_id=existing.id, status="queued") if existing.status in {"queued", "running"} else None,
+                    )
+                await TranslationMemoryImport.create(
+                    id=import_id, library=locked, user=user, idempotency_key=idempotency_key,
+                    rows=[row.model_dump() if isinstance(row, TranslationMemoryImportRow) else row for row in materialized],
+                    status="queued",
+                )
+            job = TranslationMemoryTaskDispatcher().enqueue_import(user.id, memory_id, import_id)
+            return TranslationMemoryImportResult(job=job)
+        from pydantic import ValidationError
+        valid: list[TranslationMemoryEntryCreateRequest] = []
+        invalid: list[dict[str, object]] = []
+        for row_number, row in enumerate(materialized, start=1):
+            try:
+                parsed = row if isinstance(row, TranslationMemoryImportRow) else TranslationMemoryImportRow.model_validate(row)
+                valid.append(TranslationMemoryEntryCreateRequest(**parsed.model_dump()))
+            except ValidationError as exc:
+                field = str(exc.errors()[0].get("loc", ["row"])[0])
+                code = (
+                    "SOURCE_REQUIRED" if field in {"source_language", "source_text"}
+                    else "TARGET_REQUIRED" if field in {"target_language", "target_text"}
+                    else "ROW_INVALID"
+                )
+                invalid.append({"row": row_number, "code": code, "message": str(exc.errors()[0].get("msg", "行无效"))})
+        imported = skipped = 0
+        async with transactions.in_transaction():
+            library = await TranslationMemoryLibrary.filter(id=library.id).select_for_update().get()
+            existing = await TranslationMemoryImport.filter(library_id=library.id, user_id=user.id, idempotency_key=idempotency_key).first()
+            if existing is not None and not _ignore_existing:
+                return TranslationMemoryImportResult(imported=existing.imported, skipped=existing.skipped, invalid_rows=existing.invalid_rows)
+            for request in valid:
+                source_digest = self._hash(request.source_text)
+                target_digest = self._hash(request.target_text)
+                entry = await TranslationMemoryEntry.filter(
+                    library_id=library.id, source_language=request.source_language, target_language=request.target_language,
+                    source_hash=source_digest, target_hash=target_digest,
+                ).first()
+                if entry is None:
+                    entry = await TranslationMemoryEntry.create(
+                        library=library, source_language=request.source_language, target_language=request.target_language,
+                        source_text=request.source_text, target_text=request.target_text, source_hash=source_digest,
+                        target_hash=target_digest, origin=request.origin, metadata=request.metadata,
+                    )
+                    await self._record_revision(entry, user, "批量导入翻译记忆")
+                    imported += 1
+                else:
+                    skipped += 1
+            if imported:
+                library.content_version += imported
+                await library.save(update_fields=["content_version"])
+            if existing is None:
+                await TranslationMemoryImport.create(
+                    library=library, user=user, idempotency_key=idempotency_key,
+                    imported=imported, skipped=skipped, invalid_rows=invalid, status="completed",
+                )
+            else:
+                existing.imported = imported
+                existing.skipped = skipped
+                existing.invalid_rows = invalid
+                existing.status = "completed"
+                await existing.save(update_fields=["imported", "skipped", "invalid_rows", "status"])
+        return TranslationMemoryImportResult(imported=imported, skipped=skipped, invalid_rows=invalid)
 
     async def update_entry(self, user: User, memory_id: UUID, entry_id: UUID, request: TranslationMemoryEntryUpdateRequest) -> TranslationMemoryEntryResponse:
         async with transactions.in_transaction():
