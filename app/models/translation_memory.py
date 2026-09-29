@@ -111,7 +111,6 @@ class TranslationMemoryEntrySource(TimestampedModel):
     entry = fields.ForeignKeyField(
         "models.TranslationMemoryEntry",
         related_name="sources",
-        on_delete=fields.CASCADE,
         description="来源记录所属翻译记忆条目；条目删除时一并删除来源记录。",
     )
     provider = fields.CharField(max_length=64, null=True, description="可选的来源提供方标识。")
@@ -126,4 +125,31 @@ class TranslationMemoryEntrySource(TimestampedModel):
 
     class Meta:
         table = "translation_memory_entry_sources"
+        unique_together = (("entry", "user_id", "project_id", "document_id", "segment_id"),)
         indexes = [("entry_id", "project_id"), ("project_id",), ("user_id",)]
+
+
+class TranslationMemoryImport(TimestampedModel):
+    """持久化用户导入的幂等结果，避免重复提交再次写入条目。"""
+
+    library = fields.ForeignKeyField(
+        "models.TranslationMemoryLibrary",
+        related_name="imports",
+        on_delete=fields.CASCADE, description="导入目标用户翻译记忆库。",
+    )
+    user = fields.ForeignKeyField(
+        "models.User",
+        related_name="translation_memory_imports",
+        on_delete=fields.CASCADE, description="发起导入的用户。",
+    )
+    idempotency_key = fields.CharField(max_length=160, description="客户端导入幂等键。")
+    imported = fields.IntField(default=0, description="成功写入的条目数。")
+    skipped = fields.IntField(default=0, description="已存在而跳过的条目数。")
+    invalid_rows: list[dict[str, Any]] = fields.JSONField(default=list, description="带行号的校验错误。")
+    rows: list[dict[str, Any]] = fields.JSONField(default=list, description="待处理的原始导入行。")
+    status = fields.CharField(max_length=16, default="queued", description="导入状态。")
+
+    class Meta:
+        table = "translation_memory_imports"
+        unique_together = (("library", "user", "idempotency_key"),)
+        indexes = [("library_id", "created_at")]
