@@ -16,6 +16,8 @@ from translation_backend.app.infrastructure.translation_memory.cache import buil
 from translation_backend.app.application.translation_memory.service import TranslationMemoryService
 from translation_backend.app.application.translation_memory.service import TranslationMemoryCursorError
 from translation_backend.app.core.config import app_settings
+from translation_backend.app.core import redis as redis_module
+from translation_backend.app.application.translation_memory.dependencies import get_translation_memory_service
 from translation_backend.app.infrastructure.translation_memory.search_index import source_hash
 from translation_backend.app.infrastructure.translation_memory.cache import RedisTranslationMemoryCache
 from translation_backend.app.models import Project, ProjectMember, TranslationMemoryEntry, TranslationMemoryLibrary, User
@@ -161,3 +163,16 @@ def test_redis_cache_invalidates_matching_library_version():
         assert client.deleted == ['custom:search:{"libraries":[["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",3]]}']
 
     asyncio.run(scenario())
+
+
+def test_service_factory_binds_redis_after_lifespan_initialization(monkeypatch):
+    class ReadyRedis:
+        pass
+
+    monkeypatch.setattr(app_settings, "tm_cache_enabled", True)
+    monkeypatch.setattr(app_settings, "tm_cache_namespace", "delayed")
+    monkeypatch.setattr(redis_module, "redis_client", ReadyRedis())
+    first = get_translation_memory_service()
+    second = get_translation_memory_service()
+    assert first is not second
+    assert first._cache.namespace == "delayed"

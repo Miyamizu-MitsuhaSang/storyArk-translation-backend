@@ -83,7 +83,9 @@ class TranslationMemoryService:
         if cache is not None:
             self._cache = cache
         elif app_settings.tm_cache_enabled and redis_module.redis_client is not None:
-            self._cache = RedisTranslationMemoryCache(redis_module.redis_client)
+            self._cache = RedisTranslationMemoryCache(
+                redis_module.redis_client, namespace=app_settings.tm_cache_namespace
+            )
         else:
             self._cache = NoopTranslationMemoryCache()
         self._projects = ProjectRepository()
@@ -140,6 +142,14 @@ class TranslationMemoryService:
             logger.info("translation_memory_search cache_hit=false cache_write=false")
         logger.info("translation_memory_search cache_hit=false duration_ms=%.2f matches=%d", (perf_counter() - started_at) * 1000, len(matches))
         return response
+
+    async def _invalidate_library_version(self, library_id: UUID, content_version: int) -> None:
+        try:
+            await self._cache.delete_by_library_version(library_id, content_version)
+        except Exception:
+            logging.getLogger("translation_backend.translation_memory.search").info(
+                "translation_memory_cache_invalidation available=false"
+            )
 
     async def reindex(self, user: User, project_id: UUID):
         await self._ensure_project_member(user, project_id)
@@ -229,8 +239,10 @@ class TranslationMemoryService:
                     target_hash=target_hash, origin=request.origin, metadata=request.metadata,
                 )
                 await self._record_revision(entry, user, None)
+                previous_version = library.content_version
                 library.content_version += 1
                 await library.save(update_fields=["content_version"])
+                await self._invalidate_library_version(library.id, previous_version)
         return self._entry_response(entry)
 
     async def upsert_confirmed_segment(
@@ -275,8 +287,10 @@ class TranslationMemoryService:
                     metadata={},
                 )
                 await self._record_revision(entry, user, "确认 segment 写入翻译记忆")
+                previous_version = library.content_version
                 library.content_version += 1
                 await library.save(update_fields=["content_version"])
+                await self._invalidate_library_version(library.id, previous_version)
             source = await TranslationMemoryEntrySource.filter(
                 entry_id=entry.id,
                 user_id=user.id,
@@ -373,8 +387,10 @@ class TranslationMemoryService:
                 else:
                     skipped += 1
             if imported:
+                previous_version = library.content_version
                 library.content_version += imported
                 await library.save(update_fields=["content_version"])
+                await self._invalidate_library_version(library.id, previous_version)
             if existing is None:
                 await TranslationMemoryImport.create(
                     library=library, user=user, idempotency_key=idempotency_key,
@@ -405,8 +421,10 @@ class TranslationMemoryService:
             await entry.save()
             await self._record_revision(entry, user, request.change_note)
             library = await TranslationMemoryLibrary.filter(id=memory_id).select_for_update().get()
+            previous_version = library.content_version
             library.content_version += 1
             await library.save(update_fields=["content_version"])
+            await self._invalidate_library_version(library.id, previous_version)
         return self._entry_response(entry)
 
     async def archive_entry(self, user: User, memory_id: UUID, entry_id: UUID, expected_revision: int) -> None:
@@ -421,8 +439,10 @@ class TranslationMemoryService:
             await entry.save(update_fields=["status", "deleted_at", "revision"])
             await self._record_revision(entry, user, "归档翻译记忆条目")
             library = await TranslationMemoryLibrary.filter(id=memory_id).select_for_update().get()
+            previous_version = library.content_version
             library.content_version += 1
             await library.save(update_fields=["content_version"])
+            await self._invalidate_library_version(library.id, previous_version)
 
     async def _owned_entry(self, user: User, memory_id: UUID, entry_id: UUID, *, include_archived: bool = False) -> TranslationMemoryEntry:
         await self.get_user_library(user, memory_id)

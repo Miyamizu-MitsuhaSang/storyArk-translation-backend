@@ -46,14 +46,9 @@ class TranslationMemoryTaskDispatcher:
         return JobReference(job_id=job_id, status="queued")
 
     def enqueue_rebuild(self, library_id: UUID, content_version: int) -> JobReference:
-        job_id = uuid4()
-        rebuild_translation_memory_index_task.apply_async(
-            args=[str(library_id), content_version], task_id=str(job_id)
-        )
-        return JobReference(job_id=job_id, status="queued")
+        raise RuntimeError("translation memory index persistence is not enabled")
 
 
 @celery_app.task(name="translation_memory.rebuild_index")
 def rebuild_translation_memory_index_task(library_id: str, content_version: int) -> str:
-    """Worker contract; a future index backend can consume this immutable version."""
-    return f"{library_id}:{content_version}"
+    raise RuntimeError("translation memory index persistence is not enabled")
