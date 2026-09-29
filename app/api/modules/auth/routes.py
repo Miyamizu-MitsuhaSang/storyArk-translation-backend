@@ -10,7 +10,7 @@ from ....application.auth.schemas import (
     TokenResponse,
 )
 from ....application.auth.service import AuthError, AuthService
-from ....core.security import (
+from ...shared.dependencies import (
     get_auth_service,
     get_current_user,
     oauth2_scheme,
@@ -38,6 +38,8 @@ async def _handle_auth_error(request: Request, exc: AuthError) -> JSONResponse:
 
 def register_auth_exception_handler(app) -> None:
     app.add_exception_handler(AuthError, _handle_auth_error)
+    from .translation_memory.routes import register_translation_memory_exception_handler
+    register_translation_memory_exception_handler(app)
 
 
 @auth_router.post("/login", response_model=TokenResponse, responses={401: {"model": ErrorResponse}})
@@ -88,5 +90,7 @@ async def change_password(
 
 
 from .api_key.routes import user_api_router
+from .translation_memory.routes import user_translation_memory_router
 
 auth_router.include_router(user_api_router)
+auth_router.include_router(user_translation_memory_router)
