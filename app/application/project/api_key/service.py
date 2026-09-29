@@ -6,6 +6,8 @@ from uuid import UUID
 
 from tortoise.exceptions import IntegrityError
 
+from ....domain.api_key.policies import ApiKeyPolicy
+from ....domain.shared.errors import DomainError
 from .schemas import (
     CreateProjectApiKeyRequest,
     ProjectApiKeyPage,
@@ -13,9 +15,6 @@ from .schemas import (
     UpdateProjectApiKeyRequest,
 )
 from ....models import AIProviderCredential, Project, ProjectApiKeyBinding, ProjectMember, User
-
-
-MANAGER_ROLES = {"owner", "manager"}
 
 
 class ProjectApiKeyError(Exception):
@@ -74,8 +73,10 @@ class ProjectApiKeyService:
             user=user,
             is_active=True,
         ).first()
-        if api_key is None:
-            raise ProjectApiKeyNotFoundError("API key 不存在或不可用")
+        try:
+            ApiKeyPolicy.ensure_bindable(is_owned=api_key is not None, is_active=api_key is not None and api_key.is_active)
+        except DomainError as exc:
+            raise ProjectApiKeyNotFoundError(str(exc)) from exc
 
         binding = await ProjectApiKeyBinding.filter(project=project, api_key=api_key).select_related("api_key").first()
         if binding is not None:
@@ -136,8 +137,11 @@ class ProjectApiKeyService:
         membership = await ProjectMember.filter(project_id=project_id, user=user).select_related("project").first()
         if membership is None:
             raise ProjectApiKeyNotFoundError("项目不存在或当前用户不可见")
-        if require_manager and membership.role not in MANAGER_ROLES:
-            raise ProjectApiKeyForbiddenError("当前角色没有项目 API key 管理权限")
+        if require_manager:
+            try:
+                ApiKeyPolicy.ensure_manager(membership.role)
+            except DomainError as exc:
+                raise ProjectApiKeyForbiddenError(str(exc)) from exc
         return membership.project, membership
 
     @staticmethod

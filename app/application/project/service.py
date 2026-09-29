@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 from tortoise.exceptions import IntegrityError
 from tortoise.expressions import Q
 
+from ...domain.project.policies import LanguagePairPolicy, OwnerPolicy, ProjectPolicy
+from ...domain.shared.errors import DomainError
 from .schemas import (
     AddMemberRequest,
     CreateProjectRequest,
@@ -28,9 +30,6 @@ from .schemas import (
     UserSummary,
 )
 from ...models import Project, ProjectLanguagePair, ProjectMember, User
-
-
-MANAGER_ROLES = {"owner", "manager"}
 
 
 class ProjectError(Exception):
@@ -54,6 +53,15 @@ class ProjectConflictError(ProjectError):
 
 
 class ProjectService:
+    @staticmethod
+    def _apply_policy(policy_call) -> None:
+        try:
+            policy_call()
+        except DomainError as exc:
+            if exc.code == "PROJECT_FORBIDDEN":
+                raise ProjectForbiddenError(str(exc)) from exc
+            raise ProjectConflictError(str(exc)) from exc
+
     async def create_project(self, user: User, request: CreateProjectRequest) -> ProjectResponse:
         project = await Project.create(
             key=self._new_project_key(),
@@ -136,8 +144,7 @@ class ProjectService:
                 source_language=request.default_language_pair.source,
                 target_language=request.default_language_pair.target,
             ).first()
-            if default_pair is None:
-                raise ProjectConflictError("默认语言对必须先添加到项目")
+            self._apply_policy(lambda: LanguagePairPolicy.ensure_default_pair_exists(default_pair is not None))
         changes = request.model_dump(exclude_unset=True, exclude={"default_language_pair"})
         if "name" in changes:
             changes["name"] = changes["name"].strip()
@@ -199,8 +206,7 @@ class ProjectService:
             raise ProjectNotFoundError("项目成员不存在")
         if target.role == "owner" and request.role != "owner":
             owners = await ProjectMember.filter(project=project, role="owner").count()
-            if owners <= 1:
-                raise ProjectConflictError("不能移除项目最后一个 owner")
+            self._apply_policy(lambda: OwnerPolicy.ensure_not_last_owner(target.role, request.role, owners))
         target.role = request.role
         await target.save(update_fields=["role", "updated_at"])
         return self._member_response(target)
@@ -211,8 +217,8 @@ class ProjectService:
         target = await ProjectMember.filter(project=project, user_id=target_user_id).first()
         if target is None:
             raise ProjectNotFoundError("项目成员不存在")
-        if target.role == "owner" and await ProjectMember.filter(project=project, role="owner").count() <= 1:
-            raise ProjectConflictError("不能移除项目最后一个 owner")
+        owners = await ProjectMember.filter(project=project, role="owner").count()
+        self._apply_policy(lambda: OwnerPolicy.ensure_not_last_owner(target.role, None, owners))
         await target.delete()
 
     async def list_language_pairs(self, user: User, project_id: UUID, query: LanguagePairListQuery | None = None) -> LanguagePairPage:
@@ -266,8 +272,10 @@ class ProjectService:
 
     @staticmethod
     def _require_manager(membership: ProjectMember) -> None:
-        if membership.role not in MANAGER_ROLES:
-            raise ProjectForbiddenError("当前角色没有项目管理权限")
+        try:
+            ProjectPolicy.ensure_manager(membership.role)
+        except DomainError as exc:
+            raise ProjectForbiddenError(str(exc)) from exc
 
     async def _project_response(self, project: Project, user: User) -> ProjectResponse:
         membership = await ProjectMember.filter(project=project, user=user).first()

@@ -10,6 +10,9 @@ import jwt
 from pwdlib import PasswordHash
 from tortoise.expressions import Q
 
+from ...domain.auth.policies import PasswordPolicy, TokenPolicy
+from ...domain.auth.value_objects import AccessTokenClaims
+from ...domain.shared.errors import DomainError
 from .schemas import (
     MeResponse,
     ProjectSummary,
@@ -46,6 +49,7 @@ class AuthService:
     _password_hash = PasswordHash.recommended()
 
     def hash_password(self, password: str) -> str:
+        self._validate_password(password)
         return self._password_hash.hash(password)
 
     def verify_password(self, password: str, password_hash: str) -> bool:
@@ -103,6 +107,7 @@ class AuthService:
         return user
 
     async def change_password(self, user: User, current_password: str, new_password: str) -> None:
+        self._validate_password(new_password)
         if not self.verify_password(current_password, user.password_hash):
             raise AuthError("INVALID_CREDENTIALS", "当前密码错误")
         user.password_hash = self.hash_password(new_password)
@@ -129,8 +134,9 @@ class AuthService:
 
     async def _issue_tokens(self, user: User, *, remember_me: bool) -> TokenResponse:
         now = datetime.now(timezone.utc)
-        access_expires = now + timedelta(seconds=security_settings.auth_access_token_ttl_seconds)
-        refresh_days = security_settings.auth_refresh_token_ttl_days if remember_me else 1
+        access_ttl = self._access_ttl_seconds()
+        access_expires = now + timedelta(seconds=access_ttl)
+        refresh_days = self._refresh_ttl_days(remember_me)
         refresh = _IssuedRefreshToken(
             value=secrets.token_urlsafe(48),
             expires_at=now + timedelta(days=refresh_days),
@@ -140,23 +146,40 @@ class AuthService:
             token_hash=self._hash_refresh_token(refresh.value),
             expires_at=refresh.expires_at,
         )
+        claims = AccessTokenClaims(str(user.id), now, access_expires)
         access_token = jwt.encode(
-            {
-                "sub": str(user.id),
-                "type": "access",
-                "iat": now,
-                "exp": access_expires,
-            },
+            claims.as_payload(),
             security_settings.auth_jwt_secret,
             algorithm="HS256",
         )
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh.value,
-            expires_in=security_settings.auth_access_token_ttl_seconds,
+            expires_in=access_ttl,
             user=UserResponse.model_validate(user),
         )
 
     @staticmethod
     def _hash_refresh_token(value: str) -> str:
         return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _validate_password(password: str) -> None:
+        try:
+            PasswordPolicy.validate_length(password)
+        except DomainError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @staticmethod
+    def _access_ttl_seconds() -> int:
+        try:
+            return TokenPolicy.access_ttl_seconds(security_settings.auth_access_token_ttl_seconds)
+        except DomainError as exc:
+            raise ValueError(str(exc)) from exc
+
+    @staticmethod
+    def _refresh_ttl_days(remember_me: bool) -> int:
+        try:
+            return TokenPolicy.refresh_ttl_days(security_settings.auth_refresh_token_ttl_days, remember_me)
+        except DomainError as exc:
+            raise ValueError(str(exc)) from exc
