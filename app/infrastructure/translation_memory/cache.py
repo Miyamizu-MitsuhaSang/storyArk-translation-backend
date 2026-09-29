@@ -31,16 +31,31 @@ class RedisTranslationMemoryCache:
         self.namespace = namespace
 
     async def get(self, key: str) -> str | None:
-        return await self.client.get(key)
+        return await self.client.get(self._key(key))
 
     async def set(self, key: str, value: str, ttl_seconds: int) -> None:
-        await self.client.set(key, value, ex=ttl_seconds)
+        await self.client.set(self._key(key), value, ex=ttl_seconds)
 
     async def delete_by_library_version(self, library_id: UUID, content_version: int) -> None:
-        return None
+        prefix = f"{self.namespace}:search:"
+        keys: list[str] = []
+        async for raw_key in self.client.scan_iter(match=f"{prefix}*"):
+            key = raw_key.decode() if isinstance(raw_key, bytes) else raw_key
+            try:
+                payload = json.loads(key[len(prefix):])
+                libraries = payload.get("libraries", [])
+            except (ValueError, TypeError):
+                continue
+            if [str(library_id), int(content_version)] in libraries:
+                keys.append(key)
+        if keys:
+            await self.client.delete(*keys)
+
+    def _key(self, key: str) -> str:
+        return key if key.startswith(f"{self.namespace}:") else f"{self.namespace}:{key}"
 
 
-def build_search_cache_key(request: TranslationMemorySearchRequest, *, user_id: UUID, project_id: UUID, library_versions: Mapping[UUID, int] | None = None) -> str:
+def build_search_cache_key(request: TranslationMemorySearchRequest, *, user_id: UUID, project_id: UUID, library_versions: Mapping[UUID, int] | None = None, namespace: str = "tm") -> str:
     versions = library_versions or {}
     libraries = sorted((str(library_id), int(version)) for library_id, version in versions.items())
     filters = {
@@ -53,7 +68,7 @@ def build_search_cache_key(request: TranslationMemorySearchRequest, *, user_id: 
         "updated_after": request.updated_after.isoformat() if request.updated_after else None,
         "updated_before": request.updated_before.isoformat() if request.updated_before else None,
     }
-    return "tm:search:" + json.dumps({"user": str(user_id), "project": str(project_id), "query": normalize_text(request.source_text), "filters": filters, "libraries": libraries}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return f"{namespace}:search:" + json.dumps({"user": str(user_id), "project": str(project_id), "query": normalize_text(request.source_text), "filters": filters, "libraries": libraries}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 async def cache_get(cache: Any, key: str) -> str | None:

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from uuid import UUID, uuid4
+from typing import Any
+from uuid import UUID
 
 from tortoise.expressions import Q
 
@@ -67,13 +68,18 @@ class ExactTranslationMemorySearch:
             ))
         matches = [item for item in matches if item.score >= request.min_score]
         matches.sort(key=lambda item: (-item.score, 0 if item.scope == "user" else 1, -item.priority, -item.quality_score, -item.updated_at.timestamp()))
-        # Keep every response bounded even when a caller bypasses request validation.
-        return matches[: min(request.top_k, 50)]
+        # Keep the project response bounded at twenty even when validation is bypassed.
+        return matches[: min(request.top_k, 20)]
 
 
 class TranslationMemorySearchIndex(ExactTranslationMemorySearch):
+    def __init__(self, task_dispatcher: Any | None = None) -> None:
+        self._task_dispatcher = task_dispatcher
+
     def enqueue_rebuild(self, library_id: UUID, content_version: int) -> JobReference:
-        return JobReference(job_id=uuid4(), status="queued")
+        if self._task_dispatcher is None:
+            raise RuntimeError("translation memory index task runner is not enabled")
+        return self._task_dispatcher.enqueue_rebuild(library_id, content_version)
 
 
 async def build_effective_scope(user_id: UUID) -> list[EffectiveTranslationMemoryScope]:

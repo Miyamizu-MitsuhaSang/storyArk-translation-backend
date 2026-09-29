@@ -67,7 +67,7 @@ class TranslationMemoryMatch(BaseModel):
 
 
 class TranslationMemorySearchRequest(BaseModel):
-    source_text: str = Field(min_length=1, max_length=4096)
+    source_text: str = Field(min_length=1, max_length=16384)
     source_language: str = Field(min_length=1, max_length=16)
     target_language: str = Field(min_length=1, max_length=16)
     top_k: int = Field(default=20, ge=1, le=50)

@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
+from time import perf_counter
 from datetime import datetime, timezone
 from typing import Iterable
 from uuid import UUID, uuid4
@@ -71,7 +73,13 @@ class TranslationMemoryIndexUnavailableError(TranslationMemoryError):
 class TranslationMemoryService:
     IMPORT_SYNC_LIMIT = 100
     def __init__(self, *, search_index: TranslationMemorySearchIndex | None = None, cache: TranslationMemoryCache | None = None) -> None:
-        self._search_index = search_index or TranslationMemorySearchIndex()
+        if search_index is not None:
+            self._search_index = search_index
+        elif app_settings.tm_index_tasks_enabled:
+            from ...tasks.translation_memory import TranslationMemoryTaskDispatcher
+            self._search_index = TranslationMemorySearchIndex(TranslationMemoryTaskDispatcher())
+        else:
+            self._search_index = TranslationMemorySearchIndex()
         if cache is not None:
             self._cache = cache
         elif app_settings.tm_cache_enabled and redis_module.redis_client is not None:
@@ -104,6 +112,9 @@ class TranslationMemoryService:
         )
 
     async def search(self, user: User, project_id: UUID, request: TranslationMemorySearchRequest) -> TranslationMemorySearchResponse:
+        if len(request.source_text) > app_settings.tm_search_max_text_length:
+            raise TranslationMemoryCursorError("查询文本超过长度限制")
+        started_at = perf_counter()
         await self._ensure_project_member(user, project_id)
         scope = await build_effective_scope(user.id)
         key = build_search_cache_key(
@@ -111,19 +122,23 @@ class TranslationMemoryService:
             user_id=user.id,
             project_id=project_id,
             library_versions={item.library_id: item.content_version for item in scope},
+            namespace=app_settings.tm_cache_namespace,
         )
+        logger = logging.getLogger("translation_backend.translation_memory.search")
         try:
             cached = await cache_get(self._cache, key)
             if cached:
+                logger.info("translation_memory_search cache_hit=true duration_ms=%.2f matches=cached", (perf_counter() - started_at) * 1000)
                 return TranslationMemorySearchResponse.model_validate_json(cached)
         except Exception:
-            pass
+            logger.info("translation_memory_search cache_hit=false cache_available=false")
         matches = await self._search_index.search(scope, request)
         response = TranslationMemorySearchResponse(items=matches, total=len(matches), source_hash=source_hash(request.source_text))
         try:
             await cache_set(self._cache, key, response.model_dump_json(), app_settings.tm_cache_ttl_seconds)
         except Exception:
-            pass
+            logger.info("translation_memory_search cache_hit=false cache_write=false")
+        logger.info("translation_memory_search cache_hit=false duration_ms=%.2f matches=%d", (perf_counter() - started_at) * 1000, len(matches))
         return response
 
     async def reindex(self, user: User, project_id: UUID):
@@ -131,7 +146,10 @@ class TranslationMemoryService:
         scope = await build_effective_scope(user.id)
         if not scope:
             raise TranslationMemoryIndexUnavailableError("没有可重建的翻译记忆库")
-        return self._search_index.enqueue_rebuild(scope[0].library_id, scope[0].content_version)
+        try:
+            return [self._search_index.enqueue_rebuild(item.library_id, item.content_version) for item in scope]
+        except (RuntimeError, NotImplementedError) as exc:
+            raise TranslationMemoryIndexUnavailableError(str(exc)) from exc
     async def get_or_create_user_library(self, user: User) -> TranslationMemoryLibrary:
         library = await TranslationMemoryLibrary.filter(scope="user", owner_user_id=user.id, status="active").first()
         if library:

@@ -14,6 +14,8 @@ class AppSettings(BaseSettings):
     log_file_path: Path | None = None
     tm_cache_enabled: bool = False
     tm_cache_ttl_seconds: int = 60
+    tm_cache_namespace: str = "tm"
+    tm_index_tasks_enabled: bool = False
     tm_search_max_text_length: int = 4096
     tm_search_max_page_size: int = 50
     model_config = SettingsConfigDict(
