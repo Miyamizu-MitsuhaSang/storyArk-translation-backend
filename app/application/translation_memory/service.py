@@ -41,6 +41,10 @@ class TranslationMemoryConflictError(TranslationMemoryError):
     status_code = 409
     code = "TRANSLATION_MEMORY_CONFLICT"
 
+class TranslationMemoryCursorError(TranslationMemoryError):
+    status_code = 422
+    code = "TRANSLATION_MEMORY_INVALID_CURSOR"
+
 
 class TranslationMemoryService:
     async def get_or_create_user_library(self, user: User) -> TranslationMemoryLibrary:
@@ -52,7 +56,10 @@ class TranslationMemoryService:
                 scope="user", owner_user=user, name=f"{user.display_name} TM", status="active"
             )
         except IntegrityError:
-            return await TranslationMemoryLibrary.filter(scope="user", owner_user_id=user.id, status="active").first()
+            library = await TranslationMemoryLibrary.filter(scope="user", owner_user_id=user.id, status="active").first()
+            if library is None:
+                raise TranslationMemoryConflictError("用户翻译记忆库创建冲突")
+            return library
 
     async def list_user_libraries(self, user: User, page_size: int, cursor: str | None) -> TranslationMemoryLibraryPage:
         offset = self._decode_cursor(cursor)
@@ -105,6 +112,7 @@ class TranslationMemoryService:
         source_hash = self._hash(request.source_text)
         target_hash = self._hash(request.target_text)
         async with transactions.in_transaction():
+            library = await TranslationMemoryLibrary.filter(id=library.id).select_for_update().get()
             entry = await TranslationMemoryEntry.filter(
                 library_id=library.id, source_language=request.source_language, target_language=request.target_language,
                 source_hash=source_hash, target_hash=target_hash,
@@ -116,11 +124,14 @@ class TranslationMemoryService:
                     target_hash=target_hash, origin=request.origin, metadata=request.metadata,
                 )
                 await self._record_revision(entry, user, None)
+                library.content_version += 1
+                await library.save(update_fields=["content_version"])
         return self._entry_response(entry)
 
     async def update_entry(self, user: User, memory_id: UUID, entry_id: UUID, request: TranslationMemoryEntryUpdateRequest) -> TranslationMemoryEntryResponse:
         async with transactions.in_transaction():
             entry = await self._owned_entry(user, memory_id, entry_id)
+            entry = await TranslationMemoryEntry.filter(id=entry.id).select_for_update().get()
             if entry.revision != request.expected_revision:
                 raise TranslationMemoryConflictError("条目版本已变化，请重新读取后更新")
             changes = request.model_dump(exclude_unset=True, exclude={"expected_revision", "change_note"})
@@ -133,16 +144,25 @@ class TranslationMemoryService:
             entry.revision += 1
             await entry.save()
             await self._record_revision(entry, user, request.change_note)
+            library = await TranslationMemoryLibrary.filter(id=memory_id).select_for_update().get()
+            library.content_version += 1
+            await library.save(update_fields=["content_version"])
         return self._entry_response(entry)
 
     async def archive_entry(self, user: User, memory_id: UUID, entry_id: UUID, expected_revision: int) -> None:
         async with transactions.in_transaction():
             entry = await self._owned_entry(user, memory_id, entry_id)
+            entry = await TranslationMemoryEntry.filter(id=entry.id).select_for_update().get()
             if entry.revision != expected_revision:
                 raise TranslationMemoryConflictError("条目版本已变化，请重新读取后归档")
             entry.status = "archived"
             entry.deleted_at = datetime.now(timezone.utc)
-            await entry.save(update_fields=["status", "deleted_at"])
+            entry.revision += 1
+            await entry.save(update_fields=["status", "deleted_at", "revision"])
+            await self._record_revision(entry, user, "归档翻译记忆条目")
+            library = await TranslationMemoryLibrary.filter(id=memory_id).select_for_update().get()
+            library.content_version += 1
+            await library.save(update_fields=["content_version"])
 
     async def _owned_entry(self, user: User, memory_id: UUID, entry_id: UUID, *, include_archived: bool = False) -> TranslationMemoryEntry:
         await self.get_user_library(user, memory_id)
@@ -187,7 +207,7 @@ class TranslationMemoryService:
             padded = cursor + "=" * (-len(cursor) % 4)
             offset = int(json.loads(base64.urlsafe_b64decode(padded).decode())["offset"])
         except (ValueError, KeyError, TypeError, json.JSONDecodeError, base64.binascii.Error) as exc:
-            raise TranslationMemoryConflictError("分页游标无效") from exc
+            raise TranslationMemoryCursorError("分页游标无效") from exc
         if offset < 0:
-            raise TranslationMemoryConflictError("分页游标无效")
+            raise TranslationMemoryCursorError("分页游标无效")
         return offset

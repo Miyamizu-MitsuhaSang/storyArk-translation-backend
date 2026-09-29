@@ -17,6 +17,7 @@ class TranslationMemoryLibraryResponse(BaseModel):
     owner_user_id: UUID | None
     created_at: datetime
     updated_at: datetime
+    content_version: int = 1
 
 
 class TranslationMemoryLibraryUpdateRequest(BaseModel):
