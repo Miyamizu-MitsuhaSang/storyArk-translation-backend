@@ -1,154 +1,154 @@
-# Translation Memory Persistent Index Design
+# 翻译记忆持久化索引设计
 
-## Status
+## 状态
 
-Proposed design for the persistent Translation Memory (TM) index worker. This document is the design source for the implementation plan in `docs/superpowers/plans/2026-09-30-translation-memory-persistent-index.md`.
+本文提出翻译记忆（TM）持久化索引 worker 的设计，是实施计划 `docs/superpowers/plans/2026-09-30-translation-memory-persistent-index.md` 的设计依据。
 
-## Goal
+## 目标
 
-Add a restart-safe, version-aware background indexing pipeline for TM libraries while keeping PostgreSQL as the source of truth, Redis as an optional cache only, and exact SQL search available as a safe fallback.
+为 TM 库增加可在进程重启后恢复、能够识别版本的后台索引流程，同时继续以 PostgreSQL 为事实来源、Redis 仅作可选缓存，并保留精确 SQL 查询作为可靠回退路径。
 
-## Current State
+## 当前状态
 
-- TM libraries and entries are persisted in PostgreSQL through Tortoise ORM.
-- Each library has a monotonically increasing `content_version`.
-- Exact search uses normalized source hashes and database filtering.
-- Celery is configured and already handles large TM imports.
-- `TranslationMemoryTaskDispatcher.enqueue_rebuild()` currently raises `RuntimeError` because no persistent index backend exists.
-- The bundled `translate-manager-rag` SDK currently exposes in-memory `TopKMipsIndex` and `SparseMipsRetriever` build/search operations, but no stable persistence or loading API.
-- Redis is intentionally used only for bounded search-result caching; it is not the source of index truth.
+- TM 库及其条目通过 Tortoise ORM 持久化到 PostgreSQL。
+- 每个库都有单调递增的 `content_version`。
+- 精确检索通过原文规范化哈希和数据库过滤实现。
+- Celery 已完成配置，并已处理大批量 TM 导入。
+- 目前没有持久化索引后端，因此 `TranslationMemoryTaskDispatcher.enqueue_rebuild()` 会抛出 `RuntimeError`。
+- 当前集成的 `translate-manager-rag` SDK 提供内存态的 `TopKMipsIndex` 和 `SparseMipsRetriever` 构建、查询操作，但没有稳定的持久化或加载接口。
+- Redis 仅用于有界的检索结果缓存，不是索引事实来源。
 
-## Decision
+## 方案决策
 
-Use a hybrid, versioned artifact architecture:
+采用混合式、带版本的索引产物架构：
 
-1. PostgreSQL remains the authoritative TM data store and records library versions, jobs, and index artifact metadata.
-2. A Celery worker builds a complete immutable index snapshot for one `library_id` and one `content_version`.
-3. The first artifact store is a configurable local filesystem directory for development and single-host deployments. The storage interface must allow an S3-compatible implementation later without changing application services.
-4. The RAG SDK receives a versioned persistence envelope containing its serialized index, vectorizer metadata, document-to-entry mapping, and checksum. The SDK must provide explicit save/load behavior; backend code must not depend on private native object internals.
-5. An artifact becomes searchable only after checksum verification and an atomic database publication step. A worker finishing an old content version must never replace a newer active artifact.
-6. Exact TM queries continue to use SQL. Fuzzy or semantic queries use the artifact only when a compatible active artifact exists; otherwise they return the documented `503 INDEX_NOT_AVAILABLE` response rather than silently returning stale semantic results.
+1. PostgreSQL 继续作为 TM 数据的权威存储，并记录库版本、任务和索引产物元数据。
+2. Celery worker 针对一个 `library_id` 和一个 `content_version` 构建完整且不可变的索引快照。
+3. 第一阶段使用可配置的本地文件系统目录存放索引产物，适用于开发环境和单机部署。存储接口应允许未来替换为兼容 S3 的实现，而不改动应用服务。
+4. RAG SDK 提供带版本的持久化封装，其中包含序列化索引、向量化器元数据、文档到条目的映射和校验和。SDK 必须提供明确的保存/加载接口；后端代码不能依赖 native 对象的私有实现细节。
+5. 索引产物只有在校验和验证通过、并由数据库事务原子发布后才能用于查询。旧内容版本的 worker 绝不能覆盖更新版本的活动索引。
+6. 精确 TM 查询继续使用 SQL。模糊或语义查询只有在存在兼容的活动索引产物时才使用该产物；否则返回文档约定的 `503 INDEX_NOT_AVAILABLE`，不能悄悄使用过期语义结果。
 
-## Data Model
+## 数据模型
 
-### Background jobs
+### 后台任务
 
-Introduce a minimal reusable `BackgroundJob` model for TM indexing and future document/terminology jobs:
+新增精简且可复用的 `BackgroundJob` 模型，用于 TM 索引以及未来的文档、术语任务：
 
-- `id`: UUID primary key.
-- `type`: stable job type such as `tm_index_rebuild`.
-- `status`: `queued`, `running`, `succeeded`, `failed`, or `cancelled`.
-- `resource_type` and `resource_id`: the logical resource, initially `translation_memory_library` and its UUID.
-- `requested_version`: the library `content_version` captured when the job is submitted.
-- `attempts`, `max_attempts`, `available_at`, `started_at`, `finished_at`.
-- `worker_id` and `lease_expires_at` for reclaiming crashed workers.
-- `result`: JSON result metadata with artifact ID and row count; no secrets.
-- `error_code` and `error_message` with bounded, redacted failure details.
-- `created_at` and `updated_at`.
+- `id`：UUID 主键。
+- `type`：稳定的任务类型，例如 `tm_index_rebuild`。
+- `status`：`queued`、`running`、`succeeded`、`failed` 或 `cancelled`。
+- `resource_type` 和 `resource_id`：逻辑资源，初期为 `translation_memory_library` 及其 UUID。
+- `requested_version`：提交任务时记录的库 `content_version`。
+- `attempts`、`max_attempts`、`available_at`、`started_at`、`finished_at`。
+- `worker_id` 和 `lease_expires_at`：用于回收崩溃 worker 遗留的任务。
+- `result`：JSON 结果元数据，包含产物 ID 和行数，不得包含秘密信息。
+- `error_code` 和 `error_message`：长度受限且已脱敏的失败详情。
+- `created_at` 和 `updated_at`。
 
-The model is deliberately generic, but this feature owns only the TM index job behavior. Other job types can reuse the model later.
+该模型有意设计为通用模型，但本功能只实现 TM 索引任务行为。其他任务类型以后可以复用该模型。
 
-### TM index artifacts
+### TM 索引产物
 
-Add a `TranslationMemoryIndexArtifact` model:
+新增 `TranslationMemoryIndexArtifact` 模型：
 
-- `id`: UUID.
-- `library_id`: foreign key to the TM library.
-- `content_version`: immutable source version used for the build.
-- `status`: `building`, `ready`, `active`, `superseded`, or `failed`.
-- `storage_uri`: opaque artifact-store location; never construct paths from untrusted request text.
-- `checksum`: SHA-256 of the complete artifact envelope.
-- `format_version`: artifact schema version.
-- `vectorizer_version`: deterministic vectorizer version.
-- `row_count` and `feature_count`.
-- `build_job_id`, `built_at`, `activated_at`, and `failure_reason`.
+- `id`：UUID。
+- `library_id`：指向 TM 库的外键。
+- `content_version`：构建时使用的不可变源数据版本。
+- `status`：`building`、`ready`、`active`、`superseded` 或 `failed`。
+- `storage_uri`：索引产物存储位置的不透明标识；绝不能使用不可信请求文本拼接路径。
+- `checksum`：完整索引封装的 SHA-256 校验和。
+- `format_version`：索引产物格式版本。
+- `vectorizer_version`：确定性向量化器版本。
+- `row_count` 和 `feature_count`。
+- `build_job_id`、`built_at`、`activated_at` 和 `failure_reason`。
 
-Enforce uniqueness on `(library_id, content_version, format_version)` and ensure at most one active artifact per library. Publication must be a transaction that demotes the previous active artifact and activates the new artifact only when the library still has the requested `content_version`.
+对 `(library_id, content_version, format_version)` 设置唯一约束，并保证每个库最多只有一个活动产物。发布时必须使用事务：仅当库仍处于任务请求的 `content_version` 时，才将旧活动产物降级并激活新产物。
 
-## Worker Data Flow
+## Worker 数据流
 
-1. `POST /projects/{project_id}/translation-memories/reindex` verifies project membership and determines the effective libraries.
-2. For each library, read the current `content_version` and create or reuse a `BackgroundJob` with `(type, resource_id, requested_version)` idempotency.
-3. The dispatcher submits the job ID to Celery and returns `202` with the job references. If broker or artifact storage is unavailable, return `503 INDEX_NOT_AVAILABLE` and do not create a false success record.
-4. The worker claims the job with a short lease. A second worker cannot process the same active lease.
-5. The worker reads a consistent snapshot of active, non-deleted TM entries for the requested version, creates deterministic sparse vectors, and builds the SDK index plus entry metadata mapping.
-6. The worker writes the envelope to a temporary artifact, fsyncs/flushes it, computes the checksum, and atomically renames it into its final content-addressed location.
-7. In a database transaction, verify the library version is still `requested_version`. If it changed, mark the job `superseded` and enqueue the newer version; do not publish the stale artifact.
-8. If the version is unchanged, mark the artifact `ready`, update the library's active artifact pointer, mark the job `succeeded`, and mark the old artifact `superseded`.
-9. On failure, record a redacted error, increment attempts, and retry with bounded exponential backoff. After the retry limit, mark the job `failed` and leave the previous active artifact intact.
+1. `POST /projects/{project_id}/translation-memories/reindex` 验证项目成员身份，并确定当前有效库。
+2. 对每个库读取当前 `content_version`，按 `(type, resource_id, requested_version)` 幂等地创建或复用 `BackgroundJob`。
+3. dispatcher 将任务 ID 提交给 Celery，并以 `202` 返回任务引用。如果 broker 或产物存储不可用，则返回 `503 INDEX_NOT_AVAILABLE`，不能记录虚假的成功状态。
+4. worker 通过短时租约领取任务。其他 worker 不能同时处理仍在有效租约内的同一任务。
+5. worker 读取请求版本下活动且未删除的 TM 条目一致性快照，生成确定性稀疏向量，并构建 SDK 索引及条目元数据映射。
+6. worker 将封装写入临时产物，执行 fsync/flush，计算校验和，再原子重命名到最终的内容寻址位置。
+7. 在数据库事务中确认库版本仍等于 `requested_version`。如果版本已改变，则将任务标记为 `superseded` 并为新版本创建任务；不得发布过期产物。
+8. 如果版本未变，则将产物标记为 `ready`，更新库的活动产物指针，将任务标记为 `succeeded`，并将旧产物标记为 `superseded`。
+9. 失败时记录脱敏错误、增加尝试次数，并按有界指数退避策略重试。达到重试上限后将任务标记为 `failed`，保留之前的活动产物。
 
-## Search Behavior
+## 查询行为
 
-- Permission and effective-library filtering always happen before artifact access.
-- `match_mode=exact` continues to use the database path and remains available without a worker or artifact.
-- Future `fuzzy` and `semantic` modes require an active artifact whose library and `content_version` match the database version.
-- An artifact with a lower version is stale and cannot be used for semantic results.
-- An absent, corrupt, incompatible, or unavailable artifact returns `503 INDEX_NOT_AVAILABLE` for modes that require it.
-- Redis cache keys continue to include user, project, query filters, library IDs, and content versions. Artifact publication invalidates affected cache entries.
+- 访问索引产物前必须先执行权限校验和有效库过滤。
+- `match_mode=exact` 继续使用数据库查询；即使没有 worker 或索引产物，也必须可用。
+- 未来的 `fuzzy` 和 `semantic` 模式要求存在活动产物，且产物库及 `content_version` 与数据库版本一致。
+- 低于当前版本的产物属于过期产物，不能用于语义结果。
+- 对于必须使用索引的模式，产物缺失、损坏、不兼容或不可用时返回 `503 INDEX_NOT_AVAILABLE`。
+- Redis 缓存键继续包含用户、项目、查询过滤条件、库 ID 和内容版本。发布产物时清理受影响的缓存项。
 
-## SDK Contract
+## SDK 契约
 
-Extend `translate-manager-rag` with public, versioned persistence APIs rather than serializing pybind objects from the backend:
+扩展 `translate-manager-rag`，提供公开且带版本的持久化 API；后端不得自行序列化 pybind 对象：
 
 - `TopKMipsIndex.serialize() -> bytes` and `TopKMipsIndex.deserialize(payload: bytes) -> TopKMipsIndex`.
 - `SparseMipsRetriever.serialize() -> bytes` and `SparseMipsRetriever.deserialize(payload: bytes) -> SparseMipsRetriever`.
-- The envelope records `sdk_version`, `format_version`, `feature_count`, row count, and document metadata.
-- Loading validates magic bytes, format version, dimensions, and checksum before exposing the index for search.
-- Existing in-memory `build/search/clear` behavior remains backward compatible.
+- 封装记录 `sdk_version`、`format_version`、`feature_count`、行数和文档元数据。
+- 加载时先校验魔数、格式版本、维度和校验和，再允许索引用于查询。
+- 现有内存态 `build/search/clear` 行为保持向后兼容。
 
-The backend owns the text-to-sparse-vector adapter and its versioned vocabulary/tokenization metadata. A vectorizer change creates a new `vectorizer_version` and requires a rebuild; it cannot reinterpret an old artifact.
+后端负责文本到稀疏向量的适配器，以及带版本的词汇表/分词元数据。向量化器变更时必须提升 `vectorizer_version` 并重建索引，不能用新规则重新解释旧产物。
 
-## Storage Evolution
+## 存储演进
 
-### Phase 1: Local artifact store
+### 第一阶段：本地索引产物存储
 
-Use `TM_INDEX_STORAGE_DIR` with per-library, per-version, content-addressed files. This supports local development and one worker host. The filesystem implementation must use temporary files, atomic rename, checksum verification, bounded artifact size, and safe cleanup.
+使用 `TM_INDEX_STORAGE_DIR` 存储按库、按版本组织的内容寻址文件。该方案支持本地开发和单 worker 主机。文件系统实现必须使用临时文件、原子重命名、校验和验证、产物大小限制和安全清理。
 
-### Phase 2: Shared object storage
+### 第二阶段：共享对象存储
 
-Implement the same store protocol for S3-compatible storage. Workers upload to a temporary key, verify the remote checksum, then publish database metadata. API workers load artifacts through a bounded local cache.
+为兼容 S3 的存储实现同一存储协议。worker 上传到临时对象键，验证远端校验和后再发布数据库元数据。API worker 通过有界本地缓存加载产物。
 
-### Phase 3: Scale and retention
+### 第三阶段：扩展能力与保留策略
 
-Keep the active artifact and a configurable number of previous artifacts, delete only superseded artifacts that have no running job reference, and add per-library or per-language sharding when the data volume requires it.
+保留活动产物和可配置数量的历史产物；只删除已被替代且没有运行中任务引用的产物。数据量确有需要时，再按库或语言分片。
 
-## API and Operations
+## API 与运维
 
-- Keep `POST /projects/{project_id}/translation-memories/reindex` as `202` with job references.
-- Add or reuse `GET /jobs/{job_id}` to expose status, attempts, requested version, artifact result, and redacted error details.
-- Add an internal health/readiness check for database, Celery broker, artifact store, and SDK loadability; do not equate process health with index readiness.
-- Log job ID, library ID, requested version, active version, duration, row count, artifact checksum, and failure code. Never log source text, API keys, or raw metadata.
-- Expose metrics for queue latency, build duration, stale-build discard count, retries, artifact load failures, cache hit rate, and SQL fallback count.
+- 保留 `POST /projects/{project_id}/translation-memories/reindex`，以 `202` 返回任务引用。
+- 新增或复用 `GET /jobs/{job_id}`，返回状态、尝试次数、请求版本、产物结果和脱敏错误详情。
+- 增加内部健康/就绪检查，分别检查数据库、Celery broker、产物存储和 SDK 加载能力；不能将进程健康等同于索引就绪。
+- 记录任务 ID、库 ID、请求版本、活动版本、耗时、行数、产物校验和及失败代码。不得记录原文、API key 或未经处理的元数据。
+- 暴露队列延迟、构建耗时、过期构建丢弃数、重试数、产物加载失败数、缓存命中率和 SQL 回退次数等指标。
 
-## Failure and Recovery Rules
+## 故障与恢复规则
 
-- Worker crash: lease expiry allows a later worker to reclaim the job.
-- Broker outage: reject submission with `503`; retain no misleading queued-success response.
-- Storage outage: fail/retry the job; preserve the last active artifact.
-- Database version changed during build: discard publication and enqueue the newer version.
-- Corrupt artifact: quarantine it, mark the artifact failed, and use SQL exact fallback where supported.
-- Deployment rollback: old application versions can continue using SQL exact search; artifact format versions prevent incompatible loads.
+- worker 崩溃：租约过期后允许其他 worker 重新领取任务。
+- broker 故障：提交时返回 `503`，不能返回误导性的排队成功结果。
+- 存储故障：任务失败并按策略重试；保留最后一个活动产物。
+- 构建期间数据库版本变化：放弃发布并为新版本创建任务。
+- 产物损坏：隔离产物、标记失败，并在支持的情况下使用 SQL 精确检索回退。
+- 部署回滚：旧版本应用仍可使用 SQL 精确检索；产物格式版本可阻止加载不兼容数据。
 
-## Security and Privacy
+## 安全与隐私
 
-- Scope and project membership are checked before reading artifact metadata or results.
-- Artifact paths and object keys are generated from UUIDs and hashes, never user-provided names.
-- Artifact envelopes contain only TM text, language metadata, vectorizer data, and entry IDs required for retrieval; no API keys or prompt/completion payloads.
-- Enforce maximum entry count, text size, artifact size, and worker memory limits.
-- Redact exception messages before persisting or returning them.
+- 读取索引产物元数据或结果前，必须验证作用域和项目成员关系。
+- 产物路径和对象键只能由 UUID、哈希生成，不能使用用户提供的名称。
+- 产物封装只包含检索所需的 TM 文本、语言元数据、向量化数据和条目 ID；不能包含 API key 或 prompt/completion 内容。
+- 限制条目数、文本大小、产物大小和 worker 内存用量。
+- 持久化或返回异常信息前必须脱敏。
 
-## Verification Strategy
+## 验证策略
 
-- Unit tests for serialization round trips, checksum rejection, vectorizer determinism, lease handling, stale-version protection, retry policy, and atomic publication.
-- Integration tests with SQLite/PostgreSQL-compatible schema for job/artifact transitions and version races.
-- Celery eager-mode tests for successful build, retry, failure, and requeue behavior.
-- API tests for `202`, `503`, job status, permission isolation, and exact fallback.
-- SDK tests remain in the SDK repository and must pass before backend integration is enabled.
-- Operational smoke tests cover worker startup, artifact-store permissions, database migration, and restart recovery.
+- 单元测试覆盖序列化往返、校验和拒绝、向量化确定性、租约处理、过期版本保护、重试策略和原子发布。
+- 使用 SQLite/PostgreSQL 兼容 schema 编写集成测试，覆盖任务/产物状态转换和版本竞争。
+- 使用 Celery eager 模式测试构建成功、重试、失败和重新入队。
+- API 测试覆盖 `202`、`503`、任务状态、权限隔离和精确查询回退。
+- SDK 测试保留在 SDK 仓库中；后端启用集成前必须先通过。
+- 运维冒烟测试覆盖 worker 启动、产物存储权限、数据库迁移和重启恢复。
 
-## Non-Goals
+## 非目标
 
-- Do not use Redis as the authoritative index store.
-- Do not replace PostgreSQL TM data with artifact files.
-- Do not enable semantic search before a compatible vectorizer and persisted SDK load path exist.
-- Do not implement document parsing, terminology mining, or unrelated generic jobs in the first worker release.
+- 不将 Redis 用作权威索引存储。
+- 不使用索引产物文件替代 PostgreSQL 中的 TM 数据。
+- 在兼容的向量化器和 SDK 持久化加载能力就绪前，不启用语义检索。
+- 第一版 worker 不实现文档解析、术语挖掘或无关的通用任务。

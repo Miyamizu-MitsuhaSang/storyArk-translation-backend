@@ -1,580 +1,209 @@
-# Translation Memory Persistent Index Implementation Plan
+# 翻译记忆持久化索引实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **执行说明：** 建议使用 `superpowers:subagent-driven-development` 或 `superpowers:executing-plans`，按任务逐项执行本计划。步骤使用 `- [ ]` 复选框跟踪进度。
 
-**Goal:** Build a restart-safe, version-aware TM index worker backed by persisted SDK artifacts, while preserving PostgreSQL as the source of truth and exact SQL fallback.
+**目标：** 构建可在进程重启后恢复、能够识别版本的 TM 索引 worker，持久化 RAG SDK 索引产物，同时保留 PostgreSQL 事实来源和 SQL 精确检索回退。
 
-**Architecture:** Add a generic job record and TM artifact metadata in PostgreSQL, build immutable versioned artifacts through a Celery worker, store them behind a local-filesystem/object-storage interface, and publish them atomically only when the source `content_version` still matches. Extend the RAG SDK with public serialization APIs and use a backend-owned deterministic sparse vectorizer; semantic/fuzzy search becomes available only for a compatible active artifact.
+**架构：** PostgreSQL 保存后台任务、索引产物和 `content_version`；Celery worker 构建不可变的版本化索引；第一阶段使用本地文件系统保存产物，后续替换为兼容 S3 的对象存储；只有版本匹配、校验通过并完成原子发布的产物才能用于语义检索。
 
-**Tech Stack:** Python 3.13, FastAPI, Tortoise ORM, Aerich, PostgreSQL, Celery/Redis, pytest, `translate-manager-rag`, local filesystem storage first, S3-compatible storage later.
+**技术栈：** Python 3.13、FastAPI、Tortoise ORM、Aerich、PostgreSQL、Celery/Redis、pytest、`translate-manager-rag`。
 
-**Spec:** `docs/superpowers/specs/2026-09-30-translation-memory-persistent-index-design.md`
+**设计文档：** `docs/superpowers/specs/2026-09-30-translation-memory-persistent-index-design.md`
 
-## Global Constraints
+## 全局约束
 
-- PostgreSQL TM rows and `content_version` remain the source of truth.
-- Redis is an optional result cache, never the authoritative index store.
-- Exact search remains available through SQL without a worker or artifact.
-- A stale worker must never publish an artifact over a newer library version.
-- All persisted errors and logs must be redacted and bounded.
-- Artifact paths use generated UUID/hash components only.
-- Every implementation task starts with a failing test and ends with a focused passing test.
-- Do not modify unrelated auth, project, terminology, or frontend changes already present in the worktree.
-- After each task's focused test passes, commit only that task's listed files; do not include unrelated worktree changes.
+- PostgreSQL 中的 TM 条目和 `content_version` 始终是事实来源。
+- Redis 只作为可选结果缓存，不能作为权威索引存储。
+- 即使没有 worker 或索引产物，SQL 精确检索也必须可用。
+- 过期 worker 绝不能用旧产物覆盖更新版本的库索引。
+- 所有持久化错误和日志都必须脱敏并限制长度。
+- 产物路径只能使用程序生成的 UUID/哈希部分。
+- 每项任务先编写失败测试，再实现代码，最后运行针对性测试。
+- 不修改工作树中已有的无关认证、项目、术语或前端改动。
+- 每项任务通过后，只提交该任务列出的文件。
 
-## Test Harness Conventions
+## 测试环境约定
 
-All backend tests in this plan reuse a module-scoped async SQLite fixture that initializes `translation_backend.app.models`, generates schemas, and closes Tortoise connections in teardown. The shared fixture module defines `make_user()`, `make_project_with_owner()`, `make_library(content_version=1)`, `make_artifact(library, content_version)`, and `service_with_local_store(tmp_path)`. Tests that need a service use the returned `TranslationMemoryIndexService`; tests that need publication query `TranslationMemoryIndexArtifact.filter(...).first()` directly. SDK tests use only public SDK constructors and bytes returned by `serialize()`.
-
-The same fixture module provides `bump_library_version(library_id, version)`, `build_and_publish_fixture_artifact()`, and `make_search_service()`. `StaleIndexVersionError`, `IndexResourceLimitError`, and `TranslationMemoryIndexUnavailableError` are typed exceptions produced by the tasks where they first appear; later tests import them from their defining module.
+后端测试复用异步 SQLite fixture：初始化 `translation_backend.app.models`、生成 schema，并在 teardown 时关闭 Tortoise 连接。共享 fixture 提供 `make_user()`、`make_project_with_owner()`、`make_library(content_version=1)`、`make_artifact(library, content_version)`、`service_with_local_store(tmp_path)`、`bump_library_version(library_id, version)` 和 `make_search_service()`。SDK 测试只使用公开 SDK 构造器和 `serialize()` 返回的字节。
 
 ---
 
-## Phase 0: Lock the contracts and migration boundary
+## 阶段 0：固定契约与迁移边界
 
-### Task 0: Freeze the design contracts
+### 任务 0：固定设计契约
 
-**Files:**
-- Read: `docs/superpowers/specs/2026-09-30-translation-memory-persistent-index-design.md`
-- Modify: `docs/api.md` only if the final job-status or artifact-status response differs from the existing contract.
-- Test: `tests/test_translation_memory_api.py`
+**文件：** 阅读设计文档；必要时修改 `docs/api.md`；测试 `tests/test_translation_memory_api.py`。
 
-**Interfaces:**
-- Produces the stable names used by later tasks: `BackgroundJob`, `TranslationMemoryIndexArtifact`, `IndexArtifactStore`, `TranslationMemoryIndexBackend`, and `TranslationMemoryIndexService`.
+**产出：** 固定 `BackgroundJob`、`TranslationMemoryIndexArtifact`、`IndexArtifactStore`、`TranslationMemoryIndexBackend` 和 `TranslationMemoryIndexService` 的名称及职责。
 
-- [ ] **Step 1: Write the failing contract test**
+- [ ] 编写契约失败测试，确认 reindex 响应包含 `job_id`、`status`、`requested_version` 和 `type=tm_index_rebuild`。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_api.py -q`，确认当前响应不完整。
+- [ ] 更新设计/API 文档中的响应结构，不在本任务实现 handler。
+- [ ] 再次运行测试并确认通过。
 
-```python
-def test_tm_reindex_contract_exposes_job_status_and_requested_version():
-    operation = app.openapi()["paths"][
-        "/api/v1/projects/{project_id}/translation-memories/reindex"
-    ]["post"]
-    assert "202" in operation["responses"]
-    assert "requested_version" in str(operation["responses"]["202"])
-```
+## 阶段 1：持久化基础与任务生命周期
 
-- [ ] **Step 2: Run the test and confirm the response contract is incomplete**
+### 任务 1：新增通用后台任务模型
 
-Run: `uv run pytest tests/test_translation_memory_api.py::test_tm_reindex_contract_exposes_job_status_and_requested_version -q`
+**文件：** 新建 `app/models/jobs.py`；修改 `app/models/__init__.py`；新建 `migrations/models/7_20260930190000_add_background_jobs.py`；测试 `tests/test_translation_memory_jobs.py`。
 
-Expected: FAIL because the current response only exposes the existing minimal job reference.
+**接口：** `BackgroundJob.claim()`、`BackgroundJob.complete()`、`BackgroundJob.fail()`；字段包括 `type`、`status`、`resource_type`、`resource_id`、`requested_version`、`attempts`、`max_attempts`、租约和错误信息。
 
-- [ ] **Step 3: Record the exact response shape in the design/API contract**
+- [ ] 测试同一任务只能被一个 worker 领取。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_jobs.py -q`，确认模型和状态转换尚不存在。
+- [ ] 使用 `select_for_update` 实现领取、租约过期回收、成功、失败和重试上限。
+- [ ] 为 `(status, available_at)` 与 `(resource_type, resource_id, requested_version)` 建索引。
+- [ ] 运行测试，确认所有状态转换通过。
 
-Use a response containing `job_id`, `status`, `requested_version`, and a stable `type` value of `tm_index_rebuild`. Do not implement the handler in this task.
+### 任务 2：新增 TM 索引产物模型
 
-- [ ] **Step 4: Run the focused test again**
+**文件：** 修改 `app/models/translation_memory.py`、`app/models/__init__.py`；新建 `migrations/models/8_20260930191000_add_tm_index_artifacts.py`；测试 `tests/test_translation_memory_artifacts.py`。
 
-Run: `uv run pytest tests/test_translation_memory_api.py::test_tm_reindex_contract_exposes_job_status_and_requested_version -q`
+**接口：** `TranslationMemoryIndexArtifact`，以 `(library_id, content_version, format_version)` 唯一标识，状态包括 `building`、`ready`、`active`、`superseded`、`failed`。
 
-Expected: PASS after the contract fixture/schema is updated.
+- [ ] 编写过期版本不能发布的失败测试。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_artifacts.py -q`。
+- [ ] 增加 `storage_uri`、`checksum`、`vectorizer_version`、`row_count`、`feature_count`、任务关联和失败原因。
+- [ ] 用事务锁定库记录；只有当前库版本等于产物版本时才激活产物，并将旧产物标记为 `superseded`。
+- [ ] 验证唯一性、活动产物替换和过期版本拒绝。
 
-## Phase 1: Persistence substrate and job lifecycle
+## 阶段 2：SDK 持久化与确定性向量化
 
-### Task 1: Add the reusable background job model
+### 任务 3：增加 SDK 公开序列化 API
 
-**Files:**
-- Create: `app/models/jobs.py`
-- Modify: `app/models/__init__.py`
-- Create: `migrations/models/7_20260930190000_add_background_jobs.py`
-- Test: `tests/test_translation_memory_jobs.py`
+**文件：** 修改 `../../packages/translate-manager-rag/translate_manager_rag/native.py`、`retriever.py`、`__init__.py`；测试 `../../packages/translate-manager-rag/tests/test_persistence.py`。
 
-**Interfaces:**
-- Produces `BackgroundJob.claim()`, `BackgroundJob.complete()`, `BackgroundJob.fail()`, and lease fields used by the worker.
+**接口：** `TopKMipsIndex.serialize()`、`TopKMipsIndex.deserialize(payload)`、`SparseMipsRetriever.serialize()`、`SparseMipsRetriever.deserialize(payload)`。
 
-- [ ] **Step 1: Write the failing state-transition tests**
+- [ ] 先编写索引序列化往返测试。
+- [ ] 运行：`uv run --project ../../packages/translate-manager-rag pytest ../../packages/translate-manager-rag/tests/test_persistence.py -q`，确认公开方法不存在。
+- [ ] 实现带魔数、格式版本、维度和校验的二进制封装；不得 pickle native 对象。
+- [ ] 保持现有 `build/search/clear` 行为不变。
+- [ ] 运行：`uv run --project ../../packages/translate-manager-rag pytest -q`。
 
-```python
-async def test_job_claim_is_single_owner():
-    job = await BackgroundJob.create(type="tm_index_rebuild", status="queued")
-    first = await job.claim(worker_id="worker-a")
-    second = await (await BackgroundJob.get(id=job.id)).claim(worker_id="worker-b")
-    assert first is True
-    assert second is False
-```
+### 任务 4：实现后端确定性向量化器
 
-- [ ] **Step 2: Run the test to verify the model/helper is missing**
+**文件：** 新建 `app/infrastructure/translation_memory/vectorizer.py`、`index_format.py`；测试 `tests/test_translation_memory_vectorizer.py`。
 
-Run: `uv run pytest tests/test_translation_memory_jobs.py::test_job_claim_is_single_owner -q`
+**接口：** `TranslationMemoryVectorizer(version)`、`fit(entries)`、`encode(text)`，以及包含词汇表和分词元数据的索引封装。
 
-Expected: FAIL with the missing model or claim helper.
+- [ ] 测试相同文本产生相同向量，并验证 `version`。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_vectorizer.py -q`。
+- [ ] 实现统一规范化、多语言文本处理、词汇表/Token 数量限制和版本校验。
+- [ ] 向量化器版本变化时强制重建，不得解释旧产物。
 
-- [ ] **Step 3: Implement the model and migration**
+## 阶段 3：产物存储与 worker
 
-Use a transaction with `select_for_update`, status filtering, lease expiry checks, `attempts`, `max_attempts`, `requested_version`, and bounded failure fields. Add an index on `(status, available_at)` and `(resource_type, resource_id, requested_version)`.
+### 任务 5：增加索引产物存储抽象
 
-- [ ] **Step 4: Run the lifecycle tests**
+**文件：** 新建 `app/infrastructure/translation_memory/artifact_store.py`；修改 `app/core/config.py`；测试 `tests/test_translation_memory_artifact_store.py`。
 
-Run: `uv run pytest tests/test_translation_memory_jobs.py -q`
+**接口：** `IndexArtifactStore.put_atomic()`、`open()`、`delete()`、`exists()`、`checksum()`；实现 `LocalIndexArtifactStore(root: Path)`；增加 `tm_index_storage_dir`、`tm_index_max_artifact_bytes`、`tm_index_retention_count` 配置。
 
-Expected: PASS for queued-to-running, lease expiry reclaim, success, failure, and retry-limit transitions.
+- [ ] 测试内容寻址、原子写入和路径穿越防护。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_artifact_store.py -q`。
+- [ ] 使用临时文件、flush/fsync、原子重命名、大小限制和校验和验证。
+- [ ] 存储失败抛出类型化异常，供 worker 重试。
 
-### Task 2: Add TM index artifact metadata
+### 任务 6：实现版本化 TM 索引构建和发布
 
-**Files:**
-- Modify: `app/models/translation_memory.py`
-- Modify: `app/models/__init__.py`
-- Create: `migrations/models/8_20260930191000_add_tm_index_artifacts.py`
-- Test: `tests/test_translation_memory_artifacts.py`
+**文件：** 新建 `app/application/translation_memory/index_service.py`；修改 `app/infrastructure/translation_memory/search_index.py`、`app/application/translation_memory/service.py`；测试 `tests/test_translation_memory_index_service.py`。
 
-**Interfaces:**
-- Produces `TranslationMemoryIndexArtifact` with immutable `(library_id, content_version, format_version)` identity and one active artifact per library.
+**接口：** `TranslationMemoryIndexBackend.build()`、`serialize()`、`deserialize(payload)`、`search()`；`TranslationMemoryIndexService.enqueue_rebuild()`、`build_job()`、`load_active()`、`publish_if_current()`。
 
-- [ ] **Step 1: Write the failing publication test**
+- [ ] 编写库版本在构建期间变化时不得发布的失败测试。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_index_service.py -q`。
+- [ ] 读取活动且未删除的 TM 条目，生成向量、SDK 索引、条目 ID 映射和完整封装。
+- [ ] 写入产物并计算校验和；发布前再次检查 `content_version`。
+- [ ] 验证成功构建、重复任务、校验失败、版本过期和活动产物替换。
 
-```python
-async def test_publish_artifact_rejects_stale_library_version():
-    library = await make_library(content_version=4)
-    artifact = await make_artifact(library, content_version=3)
-    with pytest.raises(StaleIndexVersionError):
-        await TranslationMemoryIndexService().publish_if_current(artifact.id)
-```
+### 任务 7：接入 Celery 领取、重试和恢复
 
-- [ ] **Step 2: Run the test and verify stale publication is not protected**
+**文件：** 修改 `app/tasks/translation_memory.py`、`app/tasks/celery_app.py`、`app/application/translation_memory/service.py`；测试 `tests/test_translation_memory_worker.py`。
 
-Run: `uv run pytest tests/test_translation_memory_artifacts.py::test_publish_artifact_rejects_stale_library_version -q`
+**接口：** `rebuild_translation_memory_index_task(job_id)`、`TranslationMemoryTaskDispatcher.enqueue_rebuild()`、`reclaim_expired_index_jobs()`。
 
-Expected: FAIL because no artifact state model/publication transaction exists.
+- [ ] 编写存储临时故障触发重试的失败测试。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_worker.py -q`，确认当前占位任务会失败。
+- [ ] 使用任务 ID 作为确定性 Celery task ID，事务领取租约，并实现指数退避和重试上限。
+- [ ] 让重复投递安全，确保旧版本构建和 worker 崩溃可恢复。
+- [ ] 验证 eager 成功、重试、重复投递、租约回收、过期构建和最终失败。
 
-- [ ] **Step 3: Implement metadata, constraints, and publication transaction**
+## 阶段 4：API 集成与精确检索回退
 
-Add statuses, checksum, storage URI, SDK/vectorizer/format versions, row and feature counts, job linkage, timestamps, and failure reason. Publish only when the library row is locked and its current version equals the artifact version.
+### 任务 8：暴露任务状态并接入 reindex 响应
 
-- [ ] **Step 4: Run artifact tests**
+**文件：** 修改 `app/api/modules/project/project_content/translation_memory/routes.py`、`app/api/router.py`、`app/application/translation_memory/schemas.py`；新建或修改 `app/api/modules/jobs/routes.py`；测试 `tests/test_translation_memory_http.py`。
 
-Run: `uv run pytest tests/test_translation_memory_artifacts.py -q`
+**接口：** `POST /api/v1/projects/{project_id}/translation-memories/reindex` 返回 `202`；`GET /api/v1/jobs/{job_id}` 返回任务状态、请求版本、尝试次数及脱敏结果。
 
-Expected: PASS for uniqueness, active replacement, stale rejection, and superseding the old artifact.
+- [ ] 测试 broker 或存储不可用时返回 `503 INDEX_NOT_AVAILABLE`。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_http.py -q`。
+- [ ] 实现成员权限检查、`202/503` 语义和任务状态脱敏；不暴露文件路径、存储 URI、原文或原始异常。
+- [ ] 确保 exact 查询在语义索引不可用时仍可用。
 
-## Phase 2: SDK persistence and deterministic vectorization
+### 任务 9：加载活动产物并开放后续检索模式
 
-### Task 3: Add public SDK serialization APIs
+**文件：** 修改 `app/application/translation_memory/service.py`、`app/infrastructure/translation_memory/search_index.py`、`app/application/translation_memory/schemas.py`；测试 `tests/test_translation_memory_search_modes.py`。
 
-**Files:**
-- Modify: `../../packages/translate-manager-rag/translate_manager_rag/native.py`
-- Modify: `../../packages/translate-manager-rag/translate_manager_rag/retriever.py`
-- Modify: `../../packages/translate-manager-rag/translate_manager_rag/__init__.py`
-- Test: `../../packages/translate-manager-rag/tests/test_persistence.py`
+**接口：** 当请求 schema 开启且存在兼容活动产物时，支持 `match_mode=fuzzy` 和 `match_mode=semantic`。
 
-**Interfaces:**
-- Produces `TopKMipsIndex.serialize()`, `TopKMipsIndex.deserialize(payload)`, `SparseMipsRetriever.serialize()`, and `SparseMipsRetriever.deserialize(payload)`.
+- [ ] 测试缺少活动产物时语义检索返回 `TranslationMemoryIndexUnavailableError`。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_search_modes.py -q`。
+- [ ] 先过滤项目有效库和语言对，再验证产物版本、格式版本、向量化器版本和权限。
+- [ ] 将 SDK 命中行映射回 TM 响应；过期或损坏产物返回 `503`。
 
-- [ ] **Step 1: Write the failing round-trip test**
+## 阶段 5：清理、监控和部署
 
-```python
-def test_sparse_mips_index_round_trips_through_bytes():
-    index = TopKMipsIndex()
-    index.build([[(0, 1.0)], [(1, 1.0)]], num_features=2)
-    restored = TopKMipsIndex.deserialize(index.serialize())
-    assert restored.search([(0, 1.0)], top_k=1) == [(0, 1.0)]
-```
+### 任务 10：增加产物清理和运行指标
 
-- [ ] **Step 2: Run the test and confirm persistence is absent**
+**文件：** 新建 `app/tasks/translation_memory_maintenance.py`；修改 `app/tasks/__init__.py`、`app/core/config.py`、`README.md`；测试 `tests/test_translation_memory_maintenance.py`。
 
-Run: `uv run --project ../../packages/translate-manager-rag pytest ../../packages/translate-manager-rag/tests/test_persistence.py -q`
+**接口：** `cleanup_superseded_artifacts()`；指标包括队列延迟、构建耗时、重试数、过期构建丢弃数、产物加载失败数和 SQL 回退数。
 
-Expected: FAIL because the public methods do not exist.
+- [ ] 测试保留活动产物、运行中任务引用产物和配置数量的历史产物。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_maintenance.py -q`。
+- [ ] 禁止删除活动、构建中或被任务引用的产物。
+- [ ] 补充 `TM_INDEX_STORAGE_DIR`、重试次数、保留数量和产物大小限制说明。
 
-- [ ] **Step 3: Implement a versioned, validated serialization envelope**
+### 任务 11：增加部署与重启恢复冒烟测试
 
-Serialize only public index state, include magic bytes and format version, reject malformed payloads, validate feature dimensions, and preserve existing in-memory build/search behavior. Do not pickle native objects.
+**文件：** 修改 `README.md`；必要时修改 `docker-compose.yml`；新建 `tests/test_translation_memory_restart.py` 和 `tests/fixtures/tm_index_artifact/`。
 
-- [ ] **Step 4: Run all SDK tests**
+- [ ] 测试进程重启后可加载活动产物，无需重新构建。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_restart.py -q`。
+- [ ] 分别检查数据库、artifact store、SDK 格式兼容性和 Celery broker；索引未就绪不能阻止 API 进程启动。
+- [ ] 运行完整后端测试并验证 worker 重启后的租约恢复。
 
-Run: `uv run --project ../../packages/translate-manager-rag pytest -q`
+## 阶段 6：共享对象存储与规模化
 
-Expected: PASS for existing native/retriever tests and the new persistence tests.
+### 任务 12：增加兼容 S3 的产物存储
 
-### Task 4: Implement the backend vectorizer contract
+**文件：** 新建 `app/infrastructure/translation_memory/object_store.py`；修改 `app/application/translation_memory/index_service.py`、`app/core/config.py`；测试 `tests/test_translation_memory_object_store.py`。
 
-**Files:**
-- Create: `app/infrastructure/translation_memory/vectorizer.py`
-- Create: `app/infrastructure/translation_memory/index_format.py`
-- Test: `tests/test_translation_memory_vectorizer.py`
+- [ ] 测试 `S3IndexArtifactStore` 与 `IndexArtifactStore` 协议一致。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_object_store.py -q`。
+- [ ] 实现临时对象键、上传、远端校验和、本地有界读取缓存和清理。
+- [ ] 不改变任务发布语义，只通过依赖注入替换存储实现。
 
-**Interfaces:**
-- Produces `TranslationMemoryVectorizer(version: str)`, `fit(entries)`, `encode(text)`, and an envelope containing vocabulary/tokenization metadata.
+### 任务 13：增加规模化保护
 
-- [ ] **Step 1: Write the failing determinism and version tests**
+**文件：** 修改 `app/infrastructure/translation_memory/vectorizer.py`、`app/application/translation_memory/index_service.py`、`app/tasks/translation_memory_maintenance.py`；测试 `tests/test_translation_memory_scale_limits.py`。
 
-```python
-def test_vectorizer_is_deterministic_and_versioned():
-    vectorizer = TranslationMemoryVectorizer(version="word-ngram-v1")
-    vectorizer.fit(["Hello world", "World gate"])
-    first = vectorizer.encode("Hello world")
-    second = vectorizer.encode("Hello world")
-    assert first == second
-    assert vectorizer.version == "word-ngram-v1"
-```
+- [ ] 测试超过内存或条目预算时抛出 `IndexResourceLimitError`。
+- [ ] 运行：`uv run pytest tests/test_translation_memory_scale_limits.py -q`。
+- [ ] 实现有界批处理、worker 内存限制、单库并发限制和背压指标。
+- [ ] 只有在显式配置后才按语言对或库分片，不能悄悄改变结果顺序。
 
-- [ ] **Step 2: Run the test and verify the adapter is missing**
+## 最终验收
 
-Run: `uv run pytest tests/test_translation_memory_vectorizer.py -q`
-
-Expected: FAIL because no deterministic vectorizer exists.
-
-- [ ] **Step 3: Implement bounded normalization, vocabulary metadata, and stable sparse vectors**
-
-Use the same normalization for build and query, cap token/vocabulary sizes, record the vectorizer version, and reject an artifact when its version is unsupported.
-
-- [ ] **Step 4: Run vectorizer tests**
-
-Run: `uv run pytest tests/test_translation_memory_vectorizer.py -q`
-
-Expected: PASS for determinism, multilingual text, size limits, and incompatible-version rejection.
-
-## Phase 3: Artifact storage and worker
-
-### Task 5: Add the artifact-store abstraction
-
-**Files:**
-- Create: `app/infrastructure/translation_memory/artifact_store.py`
-- Modify: `app/core/config.py`
-- Test: `tests/test_translation_memory_artifact_store.py`
-
-**Interfaces:**
-- Produces `IndexArtifactStore.put_atomic()`, `open()`, `delete()`, `exists()`, and `checksum()`.
-- Produces `LocalIndexArtifactStore(root: Path)` and settings `tm_index_storage_dir`, `tm_index_max_artifact_bytes`, and `tm_index_retention_count`.
-
-- [ ] **Step 1: Write the failing atomic-write and traversal tests**
-
-```python
-def test_local_store_writes_content_addressed_artifact_atomically(tmp_path):
-    store = LocalIndexArtifactStore(tmp_path)
-    location = store.put_atomic("library-id", 4, b"artifact")
-    assert store.open(location) == b"artifact"
-    assert ".." not in location
-```
-
-- [ ] **Step 2: Run the test and verify the storage interface is missing**
-
-Run: `uv run pytest tests/test_translation_memory_artifact_store.py -q`
-
-Expected: FAIL because no store exists.
-
-- [ ] **Step 3: Implement temporary-file writes, fsync/flush, atomic rename, checksum validation, size limits, and safe generated locations**
-
-No request parameter may become a path component. Storage failures must raise a typed error for the worker to retry.
-
-- [ ] **Step 4: Run storage tests**
-
-Run: `uv run pytest tests/test_translation_memory_artifact_store.py -q`
-
-Expected: PASS for atomic writes, checksum mismatch, size limits, missing files, and path safety.
-
-### Task 6: Implement versioned TM index build and publication
-
-**Files:**
-- Create: `app/application/translation_memory/index_service.py`
-- Modify: `app/infrastructure/translation_memory/search_index.py`
-- Modify: `app/application/translation_memory/service.py`
-- Test: `tests/test_translation_memory_index_service.py`
-
-**Interfaces:**
-- Produces `TranslationMemoryIndexBackend.build(entries, vectorizer)`, `serialize()`, `deserialize(payload)`, and `search(query, top_k)` as the application-facing protocol over the SDK.
-- Produces `TranslationMemoryIndexService.enqueue_rebuild(library_id, requested_version)`, `build_job(job_id, worker_id)`, `load_active(library_id)`, and `publish_if_current(artifact_id)`.
-
-- [ ] **Step 1: Write the failing stale-build test**
-
-```python
-async def test_worker_does_not_publish_when_library_version_changes_during_build():
-    library = await make_library(content_version=4)
-    job = await TranslationMemoryIndexService().enqueue_rebuild(library.id, requested_version=4)
-    await bump_library_version(library.id, 5)
-    await TranslationMemoryIndexService().build_job(job.id, worker_id="worker-a")
-    assert await TranslationMemoryIndexArtifact.filter(library_id=library.id, status="active").exists() is False
-    assert (await BackgroundJob.get(id=job.id)).status == "superseded"
-```
-
-- [ ] **Step 2: Run the test and confirm the worker is missing**
-
-Run: `uv run pytest tests/test_translation_memory_index_service.py::test_worker_does_not_publish_when_library_version_changes_during_build -q`
-
-Expected: FAIL because no build service exists.
-
-- [ ] **Step 3: Implement snapshot, vectorization, SDK build, envelope creation, store write, and guarded publication**
-
-Read only active non-deleted entries, preserve entry IDs/language metadata, calculate checksum before publication, and keep the previous active artifact on any failure.
-
-- [ ] **Step 4: Run the index-service tests**
-
-Run: `uv run pytest tests/test_translation_memory_index_service.py -q`
-
-Expected: PASS for successful build, stale version, duplicate job, checksum failure, and active-artifact replacement.
-
-### Task 7: Wire Celery task claiming, retry, and recovery
-
-**Files:**
-- Modify: `app/tasks/translation_memory.py`
-- Modify: `app/tasks/celery_app.py`
-- Modify: `app/application/translation_memory/service.py`
-- Test: `tests/test_translation_memory_worker.py`
-
-**Interfaces:**
-- Produces `rebuild_translation_memory_index_task(job_id)`, `TranslationMemoryTaskDispatcher.enqueue_rebuild(library_id, content_version)`, and `reclaim_expired_index_jobs()`.
-
-- [ ] **Step 1: Write the failing retry and lease tests**
-
-```python
-def test_index_task_retries_transient_storage_failure(monkeypatch):
-    result = run_eager_index_task_with_storage_failure(monkeypatch)
-    assert result.status == "queued"
-    assert result.retry_count == 1
-```
-
-- [ ] **Step 2: Run the test and confirm the placeholder task fails**
-
-Run: `uv run pytest tests/test_translation_memory_worker.py -q`
-
-Expected: FAIL because the current task raises `RuntimeError` and has no job lifecycle.
-
-- [ ] **Step 3: Implement idempotent dispatch and bounded retries**
-
-Use a deterministic Celery task ID derived from the job ID, claim leases transactionally, retry transient broker/storage failures with exponential backoff, mark permanent failures, and ensure repeated delivery is harmless.
-
-- [ ] **Step 4: Run worker tests**
-
-Run: `uv run pytest tests/test_translation_memory_worker.py -q`
-
-Expected: PASS for eager success, retry, duplicate delivery, lease reclaim, stale build, and terminal failure.
-
-## Phase 4: API integration and exact fallback
-
-### Task 8: Expose job status and wire reindex responses
-
-**Files:**
-- Modify: `app/api/modules/project/project_content/translation_memory/routes.py`
-- Create or modify: `app/api/modules/jobs/routes.py`
-- Modify: `app/api/router.py`
-- Modify: `app/application/translation_memory/schemas.py`
-- Test: `tests/test_translation_memory_http.py`
-
-**Interfaces:**
-- Produces `POST /api/v1/projects/{project_id}/translation-memories/reindex` with `202` job references.
-- Produces `GET /api/v1/jobs/{job_id}` with status, requested version, attempts, and redacted result/error.
-
-- [ ] **Step 1: Write the failing HTTP tests**
-
-```python
-def test_reindex_returns_503_when_broker_or_store_unavailable(client):
-    response = client.post("/api/v1/projects/project-id/translation-memories/reindex")
-    assert response.status_code == 503
-    assert response.json()["error"]["code"] == "INDEX_NOT_AVAILABLE"
-```
-
-- [ ] **Step 2: Run the HTTP tests and verify the current route cannot expose job state**
-
-Run: `uv run pytest tests/test_translation_memory_http.py -q`
-
-Expected: FAIL because the current route has no persisted job status endpoint and no typed availability handling.
-
-- [ ] **Step 3: Implement typed response schemas, permission checks, 202/503 behavior, and job status redaction**
-
-Do not expose storage URIs, filesystem paths, source text dumps, or raw exception messages. Keep exact search available even when semantic artifacts are unavailable.
-
-- [ ] **Step 4: Run HTTP tests**
-
-Run: `uv run pytest tests/test_translation_memory_http.py -q`
-
-Expected: PASS for member access, hidden projects, 202 queued responses, 503 failures, job status, and exact fallback.
-
-### Task 9: Load active artifacts for future fuzzy/semantic modes
-
-**Files:**
-- Modify: `app/application/translation_memory/service.py`
-- Modify: `app/infrastructure/translation_memory/search_index.py`
-- Modify: `app/application/translation_memory/schemas.py`
-- Test: `tests/test_translation_memory_search_modes.py`
-
-**Interfaces:**
-- Produces `match_mode="fuzzy"` and `match_mode="semantic"` only when the request schema enables them and a compatible active artifact exists.
-
-- [ ] **Step 1: Write the failing mode tests**
-
-```python
-async def test_semantic_search_rejects_missing_active_artifact():
-    request = TranslationMemorySearchRequest(
-        source_text="Hello", source_language="en", target_language="zh", match_mode="semantic"
-    )
-    with pytest.raises(TranslationMemoryIndexUnavailableError):
-        await service.search(user, project.id, request)
-```
-
-- [ ] **Step 2: Run the tests and confirm only exact mode exists**
-
-Run: `uv run pytest tests/test_translation_memory_search_modes.py -q`
-
-Expected: FAIL because the request schema and service only support exact search.
-
-- [ ] **Step 3: Implement artifact compatibility checks before SDK loading**
-
-Filter effective libraries and language pairs first, load only active artifacts with matching content/vectorizer/format versions, map row IDs back to TM responses, and return `503` for unavailable semantic search.
-
-- [ ] **Step 4: Run search-mode tests**
-
-Run: `uv run pytest tests/test_translation_memory_search_modes.py -q`
-
-Expected: PASS for exact SQL, semantic success, stale artifact rejection, permission isolation, and Redis fallback.
-
-## Phase 5: Retention, observability, and deployment
-
-### Task 10: Add artifact cleanup and operational metrics
-
-**Files:**
-- Create: `app/tasks/translation_memory_maintenance.py`
-- Modify: `app/tasks/__init__.py`
-- Modify: `app/core/config.py`
-- Modify: `README.md`
-- Test: `tests/test_translation_memory_maintenance.py`
-
-**Interfaces:**
-- Produces `cleanup_superseded_artifacts()` and metrics/log fields for queue latency, build duration, retries, stale discards, artifact failures, and SQL fallback.
-
-- [ ] **Step 1: Write the failing retention test**
-
-```python
-async def test_cleanup_keeps_active_and_running_referenced_artifacts():
-    await create_artifacts_for_library(active=5, superseded=[1, 2, 3, 4])
-    await cleanup_superseded_artifacts(retention_count=2)
-    assert await artifact_exists(version=5)
-    assert await artifact_exists(version=4)
-    assert not await artifact_exists(version=1)
-```
-
-- [ ] **Step 2: Run the test and verify cleanup is absent**
-
-Run: `uv run pytest tests/test_translation_memory_maintenance.py -q`
-
-Expected: FAIL because no retention task exists.
-
-- [ ] **Step 3: Implement retention, metrics, and documented settings**
-
-Never delete active, building, or job-referenced artifacts. Add worker startup and readiness documentation, `TM_INDEX_STORAGE_DIR`, retry limits, retention count, and artifact size limits.
-
-- [ ] **Step 4: Run maintenance tests**
-
-Run: `uv run pytest tests/test_translation_memory_maintenance.py -q`
-
-Expected: PASS for retention, restart recovery, and metric emission.
-
-### Task 11: Add deployment and restart smoke tests
-
-**Files:**
-- Modify: `README.md`
-- Modify: `docker-compose.yml` if present in the parent checkout
-- Create: `tests/test_translation_memory_restart.py`
-- Test fixture: `tests/fixtures/tm_index_artifact/`
-
-**Interfaces:**
-- Produces a documented worker process command and a repeatable restart/recovery test.
-
-- [ ] **Step 1: Write the failing restart test**
-
-```python
-async def test_restart_loads_active_artifact_without_rebuild():
-    artifact = await build_and_publish_fixture_artifact()
-    restarted = make_search_service()
-    assert await restarted.load_active(artifact.library_id)
-```
-
-- [ ] **Step 2: Run the test and verify active artifacts are not loadable after process restart**
-
-Run: `uv run pytest tests/test_translation_memory_restart.py -q`
-
-Expected: FAIL because the current SDK index is process-local.
-
-- [ ] **Step 3: Implement startup validation and worker documentation**
-
-Validate database connectivity, artifact-store readability, SDK format compatibility, and Celery broker connectivity separately. Keep API process startup independent from optional semantic-index readiness.
-
-- [ ] **Step 4: Run restart and full tests**
-
-Run: `uv run pytest -q`
-
-Expected: PASS with the existing TM/auth/project tests plus all persistent-index tests.
-
-## Phase 6: Shared object storage and scale-out
-
-### Task 12: Add an S3-compatible artifact store
-
-**Files:**
-- Create: `app/infrastructure/translation_memory/object_store.py`
-- Modify: `app/application/translation_memory/index_service.py`
-- Modify: `app/core/config.py`
-- Test: `tests/test_translation_memory_object_store.py`
-
-**Interfaces:**
-- Produces `S3IndexArtifactStore` implementing the same `IndexArtifactStore` protocol as local storage.
-
-- [ ] **Step 1: Write the failing object-store contract test**
-
-```python
-def test_s3_store_matches_local_store_protocol(fake_s3):
-    store = S3IndexArtifactStore(fake_s3, bucket="tm-index")
-    location = store.put_atomic("library-id", 4, b"artifact")
-    assert store.open(location) == b"artifact"
-```
-
-- [ ] **Step 2: Run the test and confirm only local storage exists**
-
-Run: `uv run pytest tests/test_translation_memory_object_store.py -q`
-
-Expected: FAIL because the object-store implementation is absent.
-
-- [ ] **Step 3: Implement upload, checksum verification, bounded local read cache, and cleanup**
-
-Do not change job publication semantics; only replace the artifact storage implementation through dependency injection.
-
-- [ ] **Step 4: Run object-store tests**
-
-Run: `uv run pytest tests/test_translation_memory_object_store.py -q`
-
-Expected: PASS for upload/download, checksum failure, transient retry, and protocol parity.
-
-### Task 13: Add scale safeguards
-
-**Files:**
-- Modify: `app/infrastructure/translation_memory/vectorizer.py`
-- Modify: `app/application/translation_memory/index_service.py`
-- Modify: `app/tasks/translation_memory_maintenance.py`
-- Test: `tests/test_translation_memory_scale_limits.py`
-
-**Interfaces:**
-- Produces bounded batching, memory limits, per-library concurrency, language-pair partitioning hooks, and backpressure metrics.
-
-- [ ] **Step 1: Write the failing limit tests**
-
-```python
-def test_index_build_rejects_artifact_over_memory_budget():
-    with pytest.raises(IndexResourceLimitError):
-        build_fixture_with_entries(count=10_000_000)
-```
-
-- [ ] **Step 2: Run the tests and verify no resource guard exists**
-
-Run: `uv run pytest tests/test_translation_memory_scale_limits.py -q`
-
-Expected: FAIL because the worker has no explicit resource budget.
-
-- [ ] **Step 3: Implement limits and bounded batching**
-
-Fail before exhausting worker memory, record a typed error, and preserve the previous active artifact. Add partitioning only behind explicit configuration; do not silently change result ordering.
-
-- [ ] **Step 4: Run scale tests**
-
-Run: `uv run pytest tests/test_translation_memory_scale_limits.py -q`
-
-Expected: PASS for limits, backpressure, and deterministic partitioning.
-
-## Final verification gate
-
-- [ ] Run SDK tests: `uv run --project ../../packages/translate-manager-rag pytest -q`.
-- [ ] Run backend tests: `uv run pytest -q`.
-- [ ] Run compile check: `uv run python -m compileall -q app main.py`.
-- [ ] Run formatting/diff check: `git diff --check`.
-- [ ] Apply Aerich migrations against a disposable PostgreSQL database.
-- [ ] Start API and one Celery worker, submit a rebuild, kill/restart the worker, and verify lease recovery.
-- [ ] Mutate the library during a build and verify stale publication is rejected.
-- [ ] Verify exact search works with no artifact and semantic search returns `503` until a compatible artifact is active.
-- [ ] Verify artifact files contain no secrets and logs contain no raw source text or credentials.
-- [ ] Verify the final API documentation matches the generated OpenAPI paths and response descriptions.
+- [ ] SDK 测试：`uv run --project ../../packages/translate-manager-rag pytest -q`。
+- [ ] 后端测试：`uv run pytest -q`。
+- [ ] 编译检查：`uv run python -m compileall -q app main.py`。
+- [ ] 差异检查：`git diff --check`。
+- [ ] 在临时 PostgreSQL 上执行 Aerich 迁移。
+- [ ] 启动 API 和 Celery worker，提交重建任务，重启 worker，验证租约恢复。
+- [ ] 构建期间修改 TM 库，确认旧版本产物不会被发布。
+- [ ] 无索引产物时确认 exact 查询可用，语义查询返回 `503`。
+- [ ] 确认产物和日志不包含凭据、API key 或未经脱敏的异常。
+- [ ] 确认最终 API 文档与生成的 OpenAPI 路径和响应描述一致。
