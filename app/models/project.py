@@ -199,3 +199,129 @@ class WorldviewEntry(TimestampedModel):
         table = "worldview_entries"
         unique_together = (("worldview", "entry_key"),)
         indexes = [("worldview_id", "entry_type"), ("worldview_id", "status")]
+
+
+class WorldviewEntryRevision(TimestampedModel):
+    """Immutable snapshot of a worldview entry version."""
+
+    entry = fields.ForeignKeyField(
+        "models.WorldviewEntry",
+        related_name="revisions",
+        on_delete=fields.CASCADE,
+        description="版本快照所属世界观条目；条目删除时一并删除历史快照。",
+    )
+    version = fields.IntField(description="该条目的版本号，从 1 开始递增。")
+    snapshot: dict[str, Any] = fields.JSONField(
+        description="该版本的完整条目快照，不随当前条目后续更新而变化。",
+    )
+    changed_by_id = fields.UUIDField(
+        null=True,
+        description="产生该版本的用户 ID 快照；用户删除后仍保留历史。",
+    )
+    change_note: str | None = fields.TextField(
+        null=True,
+        description="该版本的变更说明。",
+    )
+
+    class Meta:
+        table = "worldview_entry_revisions"
+        unique_together = (("entry", "version"),)
+        indexes = [("entry_id", "version"), ("changed_by_id",)]
+
+
+TERMINOLOGY_BASE_STATUSES = ("draft", "active", "archived")
+TERMINOLOGY_TERM_STATUSES = ("draft", "suggested", "approved", "deprecated", "archived")
+TERMINOLOGY_TERM_TYPES = ("character", "faction", "location", "item", "skill", "ui", "general")
+
+
+class TerminologyBase(TimestampedModel):
+    project = fields.ForeignKeyField(
+        "models.Project",
+        related_name="terminology_bases",
+        on_delete=fields.CASCADE,
+        description="术语库所属项目；项目删除时一并删除术语库。",
+    )
+    name = fields.CharField(max_length=160, description="术语库名称。")
+    description: str | None = fields.TextField(null=True, description="术语库用途和领域说明。")
+    source_language = fields.CharField(max_length=16, description="术语库源语言 BCP 47 标签。")
+    target_languages: list[str] = fields.JSONField(default=list, description="术语库支持的目标语言标签列表。")
+    priority = fields.IntField(default=0, description="术语库匹配优先级，数值越大优先级越高。")
+    status = fields.CharField(
+        max_length=24,
+        default="active",
+        choices=TERMINOLOGY_BASE_STATUSES,
+        description="术语库状态：draft、active 或 archived。",
+    )
+    version = fields.IntField(default=1, description="术语库当前版本号。")
+
+    class Meta:
+        table = "terminology_bases"
+        unique_together = (("project", "name"),)
+        indexes = [("project_id", "status"), ("project_id", "priority")]
+
+
+class TerminologyTerm(TimestampedModel):
+    base = fields.ForeignKeyField(
+        "models.TerminologyBase",
+        related_name="terms",
+        on_delete=fields.CASCADE,
+        description="术语所属术语库；术语库删除时一并删除术语。",
+    )
+    source_term = fields.CharField(max_length=512, description="源语言术语。")
+    target_terms: dict[str, str] = fields.JSONField(default=dict, description="按目标语言记录的官方译文。")
+    term_type = fields.CharField(
+        max_length=32,
+        choices=TERMINOLOGY_TERM_TYPES,
+        description="术语类型：character、faction、location、item、skill、ui 或 general。",
+    )
+    status = fields.CharField(
+        max_length=24,
+        default="suggested",
+        choices=TERMINOLOGY_TERM_STATUSES,
+        description="术语状态：draft、suggested、approved、deprecated 或 archived。",
+    )
+    forbidden_translations: list[str] = fields.JSONField(
+        default=list,
+        description="禁止使用的译法列表。",
+    )
+    case_sensitive = fields.BooleanField(default=False, description="匹配源术语时是否区分大小写。")
+    notes: str | None = fields.TextField(null=True, description="术语说明和使用备注。")
+    worldview_entry = fields.ForeignKeyField(
+        "models.WorldviewEntry",
+        related_name="terminology_terms",
+        null=True,
+        on_delete=fields.SET_NULL,
+        description="可选的关联世界观条目；世界观条目删除后保留术语但清空关联。",
+    )
+    source = fields.CharField(max_length=32, default="manual", description="术语来源，例如 manual 或 extracted。")
+    version = fields.IntField(default=1, description="术语当前版本号。")
+    deleted_at: datetime | None = fields.DatetimeField(null=True, description="软删除时间；为空表示未删除。")
+    created_by_id = fields.UUIDField(null=True, description="创建术语的用户 ID 快照。")
+
+    class Meta:
+        table = "terminology_terms"
+        indexes = [
+            ("base_id", "status"),
+            ("base_id", "term_type"),
+            ("source_term",),
+        ]
+
+
+class TerminologyTermRevision(TimestampedModel):
+    """Immutable snapshot of a terminology term version."""
+
+    term = fields.ForeignKeyField(
+        "models.TerminologyTerm",
+        related_name="revisions",
+        on_delete=fields.CASCADE,
+        description="版本快照所属术语；术语删除时一并删除历史快照。",
+    )
+    version = fields.IntField(description="术语版本号。")
+    snapshot: dict[str, Any] = fields.JSONField(description="术语该版本的完整快照。")
+    changed_by_id = fields.UUIDField(null=True, description="产生该版本的用户 ID 快照。")
+    change_note: str | None = fields.TextField(null=True, description="该版本的变更说明。")
+
+    class Meta:
+        table = "terminology_term_revisions"
+        unique_together = (("term", "version"),)
+        indexes = [("term_id", "version"), ("changed_by_id",)]

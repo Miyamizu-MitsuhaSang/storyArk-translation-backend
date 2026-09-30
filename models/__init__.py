@@ -18,6 +18,15 @@ try:
         User,
         Worldview,
         WorldviewEntry,
+        WorldviewEntryRevision,
+        TerminologyBase,
+        TerminologyTerm,
+        TerminologyTermRevision,
+        TranslationMemoryLibrary,
+        TranslationMemoryEntry,
+        TranslationMemoryEntryRevision,
+        TranslationMemoryEntrySource,
+        TranslationMemoryImport,
     )
 except ImportError:
     from app.models import (
@@ -32,6 +41,15 @@ except ImportError:
         User,
         Worldview,
         WorldviewEntry,
+        WorldviewEntryRevision,
+        TerminologyBase,
+        TerminologyTerm,
+        TerminologyTermRevision,
+        TranslationMemoryLibrary,
+        TranslationMemoryEntry,
+        TranslationMemoryEntryRevision,
+        TranslationMemoryEntrySource,
+        TranslationMemoryImport,
     )
 
 __all__ = [
@@ -46,4 +64,13 @@ __all__ = [
     "User",
     "Worldview",
     "WorldviewEntry",
+    "WorldviewEntryRevision",
+    "TerminologyBase",
+    "TerminologyTerm",
+    "TerminologyTermRevision",
+    "TranslationMemoryLibrary",
+    "TranslationMemoryEntry",
+    "TranslationMemoryEntryRevision",
+    "TranslationMemoryEntrySource",
+    "TranslationMemoryImport",
 ]

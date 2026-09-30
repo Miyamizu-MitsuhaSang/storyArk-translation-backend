@@ -10,7 +10,8 @@ from .....application.auth.api_key.schemas import (
     UpdateApiKeyRequest,
 )
 from .....application.auth.api_key.service import ApiKeyError, ApiKeyService
-from .....core.security import get_api_key_service, get_current_user
+from ....shared.dependencies import get_current_user
+from .dependencies import get_api_key_service
 from .....models import User
 
 

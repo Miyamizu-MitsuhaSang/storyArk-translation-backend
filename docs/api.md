@@ -2,7 +2,7 @@
 
 通用 CAT/AI 翻译平台 API 设计草案。本文档描述第一版业务 API 契约，作为 FastAPI 路由、Pydantic Schema 和前端 API client 的共同依据。
 
-当前仓库只实现了健康检查和基础 RAG 验证接口；本文档中的认证、项目、文档、segment、术语、TM、审核和导出接口属于后续实现范围。设计先以通用游戏本地化 CAT 平台为目标，后续可以根据实际业务删减字段。
+当前仓库已实现认证、项目基础能力、健康检查、RAG 验证接口和翻译记忆（TM）核心查询；文档、segment、术语、审核和导出等部分仍按契约逐步接入。运行时是否可用以 `/openapi.json` 和集成测试为准。
 
 ## 文档源与同步
 
@@ -507,69 +507,62 @@ GET /projects/project-123/context?segment_id=seg-123&include=worldview,terms,tm,
 
 ## 7. Translation Memory API
 
-### GET `/projects/{project_id}/translation-memories`
+TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平台维护，可作为项目的有效来源。所有 TM 路由都需要 Bearer access token，并通过项目成员关系检查项目可见性；不可见项目统一返回 `404`。`owner`/`manager` 可管理项目级配置，用户库的条目写入只允许库所有者，`translator`、`reviewer` 和 `viewer` 只能在其项目权限内检索有效库。
 
-获取 TM 库及其语言对、优先级、条目数和索引状态。
+### 7.1 用户 TM 库 CRUD
 
-### POST `/projects/{project_id}/translation-memories`
+当前运行时的用户库资源位于 `/auth/me/translation-memories`，不会暴露无用户边界的 `/translation-memories` 路由：
 
-创建 TM 库：
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/auth/me/translation-memories` | 列出当前用户的 `user` 库，支持 `page_size` 和不透明 `cursor` |
+| `GET` | `/auth/me/translation-memories/{memory_id}` | 读取当前用户拥有的库 |
+| `PATCH` | `/auth/me/translation-memories/{memory_id}` | 更新名称、描述或 `active`/`archived` 状态 |
+| `GET` | `/auth/me/translation-memories/{memory_id}/entries` | 列出活动条目，支持 `page_size` 和 `cursor` |
+| `POST` | `/auth/me/translation-memories/{memory_id}/entries` | 创建条目，来源 `origin` 可为 `confirmed_segment`、`imported`、`machine_translated` 或 `manual` |
+| `PATCH` | `/auth/me/translation-memories/{memory_id}/entries/{entry_id}` | 携带 `expected_revision` 更新条目并保留修订历史 |
+| `DELETE` | `/auth/me/translation-memories/{memory_id}/entries/{entry_id}` | 携带 `expected_revision` 归档条目，不物理删除历史 |
+| `POST` | `/auth/me/translation-memories/{memory_id}/imports` | 使用 `Idempotency-Key` 批量导入条目；小批量同步返回结果，超过阈值返回 queued job |
 
-```json
-{
-  "name": "Aurora Main TM",
-  "source_language": "zh-CN",
-  "target_language": "en-US",
-  "priority": 100
-}
-```
+批量导入只允许写入当前用户的 active `user` 库。每个错误保留 1-based `row`、`code` 和 `message`；重复提交相同幂等键返回既有结果。`metadata` 仅允许受控业务字段，禁止 `prompt`、`completion`、`api_key`、`secret`、`token` 等敏感键，大小上限为 8192 字节。
 
-### POST `/projects/{project_id}/tm/search`
+重复写请求应携带 `Idempotency-Key`。相同 key 重试必须返回同一业务结果；参数或版本不一致分别返回 `422` 或 `409 TRANSLATION_MEMORY_CONFLICT`。
 
-检索精确匹配、模糊匹配和语义匹配：
+### 7.2 项目有效范围和检索
+
+`GET /projects/{project_id}/translation-memories` 返回当前用户在该项目可使用的 `platform` 库和自己的 `user` 库，并返回语言对、优先级、`content_version`、条目数和 `index_status`。项目成员关系是唯一有效范围来源，不能通过请求参数读取其他项目或其他用户的库。
+
+`POST /projects/{project_id}/tm/search` 当前支持精确检索：
 
 ```json
 {
   "source_text": "欢迎来到晨曦大陆。",
   "source_language": "zh-CN",
   "target_language": "en-US",
-  "top_k": 10,
-  "min_score": 0.65,
-  "include_rag": true,
-  "context": {
-    "document_id": "doc-123",
-    "segment_id": "seg-123"
-  }
+  "top_k": 20,
+  "min_score": 0.0,
+  "match_mode": "exact",
+  "include_library_ids": []
 }
 ```
 
-结果应包含 `match_type`、`score`、源文、译文、来源文档、确认人和术语/世界观上下文：
+响应包含 `source_hash`、`index_status`、条目来源和 `score`。`match_mode` 预留 `fuzzy`、`semantic` 扩展；接入向量索引后仍必须先应用项目有效范围和语言对过滤，再执行模糊或语义召回。查询文本超过服务端上限返回 `422`，索引不可用返回 `503 INDEX_NOT_AVAILABLE`。
 
-```json
-{
-  "items": [
-    {
-      "id": "tm-456",
-      "source_text": "欢迎来到晨曦大陆。",
-      "target_text": "Welcome to the Dawn Continent.",
-      "score": 1.0,
-      "match_type": "exact",
-      "source": "confirmed_translation",
-      "metadata": {"document_id": "doc-old"}
-    }
-  ],
-  "next_cursor": null,
-  "total": 1
-}
-```
+### 7.3 confirmed segment 自动写入
 
-### POST `/projects/{project_id}/translation-memories/{tm_id}/entries`
+segment 从 `approved` 转为 `confirmed` 时，工作流必须以 `origin=confirmed_segment` 写入当前项目可见的 TM。写入键由项目、语言对和原文规范化哈希组成；同一 segment 重试确认不会产生重复条目。撤销确认不删除历史，而是创建新修订或将原条目标记为过期，并记录审计事件。
 
-手动导入或创建 TM 条目。已确认的 segment 也通过工作流自动写入 TM。
+### 7.4 批量导入、重建和异步任务
 
-### POST `/projects/{project_id}/translation-memories/{tm_id}/reindex`
+批量导入使用 `Idempotency-Key`，服务端先校验每一行并保留原始 `row`、错误 `code` 和 `message`。小于同步阈值的请求可返回 `200` `{imported,skipped,invalid_rows}`；超过阈值或需要后台 worker 时返回 `202` `{job_id,status:"queued"}`，通过 `/jobs/{job_id}` 查询最终结果。相同 key 的重试不得重复写入；已归档库返回 `409`。
 
-异步重建 TM/RAG 索引，返回 `202` 和 `job_id`。
+`POST /projects/{project_id}/translation-memories/reindex` 为异步操作，成功返回 `202` 和一个或多个 `job_id`。队列或索引后端暂不可用返回 `503 INDEX_NOT_AVAILABLE`，调用方应按 `Retry-After` 或指数退避重试，不能把 `503` 当作已提交。重建任务按 `content_version` 消费，旧版本完成后不得覆盖更新版本索引。
+
+### 7.5 Redis 可选缓存和大数据量演进
+
+Redis 只用于可选的检索结果缓存，不改变权限判断和数据库事实来源。缓存 key 必须包含用户、项目、规范化查询、过滤条件及每个库的 `content_version`；Redis 不可用时自动降级为无缓存查询，不能导致接口失败。生产部署可设置 `TM_CACHE_ENABLED=true`、`TM_CACHE_TTL_SECONDS` 和 `TM_CACHE_NAMESPACE`，并监控命中率、查询耗时和缓存异常。
+
+数据量增长时按以下顺序演进：先使用数据库精确索引和 `cursor` 分页，随后为规范化原文哈希增加唯一索引；再将模糊/语义索引和批量重建移至 Celery worker，最后按租户或语言对分片。所有阶段都保留 `content_version`、幂等键和可重放导入记录，避免全量重建阻塞在线检索。
 
 ## 8. Document and import/export API
 

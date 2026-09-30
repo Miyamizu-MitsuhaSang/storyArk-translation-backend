@@ -60,6 +60,12 @@ class TranslationMemoryConflictError(TranslationMemoryError):
     status_code = 409
     code = "TRANSLATION_MEMORY_CONFLICT"
 
+
+class TranslationMemoryIdempotencyError(TranslationMemoryError):
+    status_code = 422
+    code = "TRANSLATION_MEMORY_IDEMPOTENCY_MISMATCH"
+
+
 class TranslationMemoryCursorError(TranslationMemoryError):
     status_code = 422
     code = "TRANSLATION_MEMORY_INVALID_CURSOR"
@@ -327,6 +333,7 @@ class TranslationMemoryService:
         if not idempotency_key.strip():
             raise TranslationMemoryConflictError("幂等键不能为空")
         materialized = list(rows)
+        payload_hash = self._import_payload_hash(materialized)
         if len(materialized) > self.IMPORT_SYNC_LIMIT:
             from ...tasks.translation_memory import TranslationMemoryTaskDispatcher
             import_id = uuid4()
@@ -336,6 +343,8 @@ class TranslationMemoryService:
                     library_id=locked.id, user_id=user.id, idempotency_key=idempotency_key,
                 ).first()
                 if existing is not None:
+                    if existing.payload_hash and existing.payload_hash != payload_hash:
+                        raise TranslationMemoryIdempotencyError("相同幂等键不能复用不同的导入内容")
                     return TranslationMemoryImportResult(
                         imported=existing.imported, skipped=existing.skipped,
                         invalid_rows=existing.invalid_rows,
@@ -344,6 +353,7 @@ class TranslationMemoryService:
                 await TranslationMemoryImport.create(
                     id=import_id, library=locked, user=user, idempotency_key=idempotency_key,
                     rows=[row.model_dump() if isinstance(row, TranslationMemoryImportRow) else row for row in materialized],
+                    payload_hash=payload_hash,
                     status="queued",
                 )
             job = TranslationMemoryTaskDispatcher().enqueue_import(user.id, memory_id, import_id)
@@ -368,6 +378,8 @@ class TranslationMemoryService:
             library = await TranslationMemoryLibrary.filter(id=library.id).select_for_update().get()
             existing = await TranslationMemoryImport.filter(library_id=library.id, user_id=user.id, idempotency_key=idempotency_key).first()
             if existing is not None and not _ignore_existing:
+                if existing.payload_hash and existing.payload_hash != payload_hash:
+                    raise TranslationMemoryIdempotencyError("相同幂等键不能复用不同的导入内容")
                 return TranslationMemoryImportResult(imported=existing.imported, skipped=existing.skipped, invalid_rows=existing.invalid_rows)
             for request in valid:
                 source_digest = self._hash(request.source_text)
@@ -394,18 +406,22 @@ class TranslationMemoryService:
             if existing is None:
                 await TranslationMemoryImport.create(
                     library=library, user=user, idempotency_key=idempotency_key,
-                    imported=imported, skipped=skipped, invalid_rows=invalid, status="completed",
+                    imported=imported, skipped=skipped, invalid_rows=invalid, payload_hash=payload_hash, status="completed",
                 )
             else:
                 existing.imported = imported
                 existing.skipped = skipped
                 existing.invalid_rows = invalid
+                existing.payload_hash = payload_hash
                 existing.status = "completed"
-                await existing.save(update_fields=["imported", "skipped", "invalid_rows", "status"])
+                await existing.save(update_fields=["imported", "skipped", "invalid_rows", "payload_hash", "status"])
         return TranslationMemoryImportResult(imported=imported, skipped=skipped, invalid_rows=invalid)
 
     async def update_entry(self, user: User, memory_id: UUID, entry_id: UUID, request: TranslationMemoryEntryUpdateRequest) -> TranslationMemoryEntryResponse:
         async with transactions.in_transaction():
+            library = await self.get_user_library(user, memory_id)
+            if not can_write_library(user, library):
+                raise TranslationMemoryConflictError("翻译记忆库不可写入")
             entry = await self._owned_entry(user, memory_id, entry_id)
             entry = await TranslationMemoryEntry.filter(id=entry.id).select_for_update().get()
             if entry.revision != request.expected_revision:
@@ -429,6 +445,9 @@ class TranslationMemoryService:
 
     async def archive_entry(self, user: User, memory_id: UUID, entry_id: UUID, expected_revision: int) -> None:
         async with transactions.in_transaction():
+            library = await self.get_user_library(user, memory_id)
+            if not can_write_library(user, library):
+                raise TranslationMemoryConflictError("翻译记忆库不可写入")
             entry = await self._owned_entry(user, memory_id, entry_id)
             entry = await TranslationMemoryEntry.filter(id=entry.id).select_for_update().get()
             if entry.revision != expected_revision:
@@ -474,6 +493,15 @@ class TranslationMemoryService:
     @staticmethod
     def _hash(value: str) -> str:
         return hashlib.sha256(" ".join(value.split()).casefold().encode()).hexdigest()
+
+    @classmethod
+    def _import_payload_hash(cls, rows: Iterable[TranslationMemoryImportRow]) -> str:
+        payload = [
+            row.model_dump(mode="json") if isinstance(row, TranslationMemoryImportRow) else row
+            for row in rows
+        ]
+        serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _encode_cursor(offset: int) -> str:

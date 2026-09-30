@@ -9,8 +9,8 @@ from .base import TimestampedModel
 
 TM_LIBRARY_SCOPES = ("platform", "user")
 TM_LIBRARY_STATUSES = ("draft", "active", "archived")
-TM_ENTRY_STATUSES = ("active", "archived")
-TM_ENTRY_ORIGINS = ("confirmed_segment", "imported", "machine_translated", "manual")
+TM_ENTRY_STATUSES = ("active", "deprecated", "archived")
+TM_ENTRY_ORIGINS = ("platform_seed", "confirmed_segment", "manual", "import", "imported", "machine_translated")
 
 
 class TranslationMemoryLibrary(TimestampedModel):
@@ -34,6 +34,7 @@ class TranslationMemoryLibrary(TimestampedModel):
         choices=TM_LIBRARY_STATUSES,
         description="翻译记忆库状态：draft、active 或 archived。",
     )
+    priority = fields.IntField(default=0, description="项目检索时的库优先级，数值越大越优先。")
     content_version = fields.IntField(default=1, description="库内容版本，每次条目变更递增。")
 
     async def save(self, *args: Any, **kwargs: Any) -> None:
@@ -111,6 +112,7 @@ class TranslationMemoryEntrySource(TimestampedModel):
     entry = fields.ForeignKeyField(
         "models.TranslationMemoryEntry",
         related_name="sources",
+        on_delete=fields.CASCADE,
         description="来源记录所属翻译记忆条目；条目删除时一并删除来源记录。",
     )
     provider = fields.CharField(max_length=64, null=True, description="可选的来源提供方标识。")
@@ -147,6 +149,7 @@ class TranslationMemoryImport(TimestampedModel):
     skipped = fields.IntField(default=0, description="已存在而跳过的条目数。")
     invalid_rows: list[dict[str, Any]] = fields.JSONField(default=list, description="带行号的校验错误。")
     rows: list[dict[str, Any]] = fields.JSONField(default=list, description="待处理的原始导入行。")
+    payload_hash = fields.CharField(max_length=64, default="", description="导入请求内容的稳定哈希，用于幂等键参数一致性校验。")
     status = fields.CharField(max_length=16, default="queued", description="导入状态。")
 
     class Meta:

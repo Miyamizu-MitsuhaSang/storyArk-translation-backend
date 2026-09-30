@@ -9,14 +9,10 @@ from ....core.schemas import (
 from ....application.rag.service import (
     RagIndexNotBuiltError,
     RagService,
-    get_rag_service as get_service,
 )
+from .dependencies import get_rag_service
 
 router = APIRouter(prefix="/rag", tags=["rag"])
-
-
-def get_rag_service() -> RagService:
-    return get_service()
 
 
 @router.post(

@@ -4,7 +4,17 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+_FORBIDDEN_METADATA_KEYS = {"prompt", "completion", "api_key", "apikey", "secret", "token"}
+
+
+def _validate_metadata(value: dict[str, Any]) -> dict[str, Any]:
+    if {str(key).casefold() for key in value} & _FORBIDDEN_METADATA_KEYS:
+        raise ValueError("metadata 不得包含凭据、token、prompt 或 completion 字段")
+    if len(str(value).encode("utf-8")) > 8192:
+        raise ValueError("metadata 超过 8192 字节限制")
+    return value
 
 
 class TranslationMemoryLibraryResponse(BaseModel):
@@ -101,8 +111,9 @@ class TranslationMemoryEntryCreateRequest(BaseModel):
     target_language: str = Field(min_length=1, max_length=16)
     source_text: str = Field(min_length=1)
     target_text: str = Field(min_length=1)
-    origin: Literal["confirmed_segment", "imported", "machine_translated", "manual"] = "manual"
+    origin: Literal["platform_seed", "confirmed_segment", "manual", "import", "imported", "machine_translated"] = "manual"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    _metadata_policy = field_validator("metadata")(_validate_metadata)
 
 
 class TranslationMemoryEntryUpdateRequest(BaseModel):
@@ -110,10 +121,11 @@ class TranslationMemoryEntryUpdateRequest(BaseModel):
     target_language: str | None = Field(default=None, min_length=1, max_length=16)
     source_text: str | None = Field(default=None, min_length=1)
     target_text: str | None = Field(default=None, min_length=1)
-    origin: Literal["confirmed_segment", "imported", "machine_translated", "manual"] | None = None
+    origin: Literal["platform_seed", "confirmed_segment", "manual", "import", "imported", "machine_translated"] | None = None
     metadata: dict[str, Any] | None = None
     expected_revision: int = Field(ge=1)
     change_note: str | None = None
+    _metadata_policy = field_validator("metadata")(_validate_metadata)
 
 
 class TranslationMemoryEntryResponse(BaseModel):
@@ -144,8 +156,9 @@ class TranslationMemoryImportRow(BaseModel):
     target_language: str = Field(min_length=1, max_length=16)
     source_text: str = Field(min_length=1)
     target_text: str = Field(min_length=1)
-    origin: Literal["confirmed_segment", "imported", "machine_translated", "manual"] = "imported"
+    origin: Literal["platform_seed", "confirmed_segment", "manual", "import", "imported", "machine_translated"] = "import"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    _metadata_policy = field_validator("metadata")(_validate_metadata)
 
 
 class JobReference(BaseModel):
@@ -158,3 +171,8 @@ class TranslationMemoryImportResult(BaseModel):
     skipped: int = 0
     invalid_rows: list[dict[str, object]] = Field(default_factory=list)
     job: JobReference | None = None
+
+
+class TranslationMemoryReindexResponse(BaseModel):
+    job_id: UUID
+    status: Literal["queued", "running", "failed"]

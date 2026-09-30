@@ -2,17 +2,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import hashlib
 import secrets
 from typing import Any
 
 import jwt
-from pwdlib import PasswordHash
-from tortoise.expressions import Q
 
 from ...domain.auth.policies import PasswordPolicy, TokenPolicy
 from ...domain.auth.value_objects import AccessTokenClaims
 from ...domain.shared.errors import DomainError
+from ...core.security import (
+    create_access_token,
+    decode_access_token,
+    hash_password,
+    hash_refresh_token,
+    verify_password,
+)
 from .schemas import (
     MeResponse,
     ProjectSummary,
@@ -20,7 +24,8 @@ from .schemas import (
     UserResponse,
 )
 from ...core.config import security_settings
-from ...models import ProjectMember, RefreshToken, User
+from ...models import RefreshToken, User
+from ...repositories import MembershipRepository, RefreshTokenRepository, UserRepository
 
 
 class AuthError(Exception):
@@ -46,30 +51,36 @@ class _IssuedRefreshToken:
 
 
 class AuthService:
-    _password_hash = PasswordHash.recommended()
+    def __init__(
+        self,
+        *,
+        users: UserRepository | None = None,
+        refresh_tokens: RefreshTokenRepository | None = None,
+        memberships: MembershipRepository | None = None,
+    ) -> None:
+        self._users = users or UserRepository()
+        self._refresh_tokens = refresh_tokens or RefreshTokenRepository()
+        self._memberships = memberships or MembershipRepository()
 
     def hash_password(self, password: str) -> str:
         self._validate_password(password)
-        return self._password_hash.hash(password)
+        return hash_password(password)
 
     def verify_password(self, password: str, password_hash: str) -> bool:
-        try:
-            return self._password_hash.verify(password, password_hash)
-        except (ValueError, TypeError):
-            return False
+        return verify_password(password, password_hash)
 
     async def login(self, login: str, password: str, *, remember_me: bool) -> TokenResponse:
-        user = await User.filter(Q(username=login) | Q(email=login)).first()
+        user = await self._users.find_by_login(login)
         if user is None or not user.is_active or not self.verify_password(password, user.password_hash):
             raise AuthError("INVALID_CREDENTIALS", "用户名或密码错误")
 
         user.last_login_at = datetime.now(timezone.utc)
-        await user.save(update_fields=["last_login_at", "updated_at"])
+        await self._users.save(user, update_fields=["last_login_at", "updated_at"])
         return await self._issue_tokens(user, remember_me=remember_me)
 
     async def refresh(self, refresh_token: str) -> TokenResponse:
-        token_hash = self._hash_refresh_token(refresh_token)
-        stored = await RefreshToken.filter(token_hash=token_hash).select_related("user").first()
+        token_hash = hash_refresh_token(refresh_token)
+        stored = await self._refresh_tokens.find_by_hash(token_hash, with_user=True)
         now = datetime.now(timezone.utc)
         if (
             stored is None
@@ -79,27 +90,20 @@ class AuthService:
         ):
             raise AuthError("INVALID_REFRESH_TOKEN", "刷新令牌无效或已过期")
 
-        stored.revoked_at = now
-        await stored.save(update_fields=["revoked_at", "updated_at"])
+        await self._refresh_tokens.revoke(stored, revoked_at=now)
         return await self._issue_tokens(stored.user, remember_me=True)
 
     async def logout(self, refresh_token: str) -> None:
-        stored = await RefreshToken.filter(token_hash=self._hash_refresh_token(refresh_token)).first()
+        stored = await self._refresh_tokens.find_by_hash(hash_refresh_token(refresh_token))
         if stored is not None and stored.revoked_at is None:
-            stored.revoked_at = datetime.now(timezone.utc)
-            await stored.save(update_fields=["revoked_at", "updated_at"])
+            await self._refresh_tokens.revoke(stored)
 
     async def user_from_access_token(self, access_token: str) -> User:
         try:
-            payload = jwt.decode(
-                access_token,
-                security_settings.auth_jwt_secret,
-                algorithms=["HS256"],
-                options={"require": ["sub", "exp", "type"]},
-            )
+            payload = decode_access_token(access_token)
             if payload.get("type") != "access":
                 raise ValueError("not an access token")
-            user = await User.get_or_none(id=payload["sub"], is_active=True)
+            user = await self._users.find_active(payload["sub"])
         except (jwt.InvalidTokenError, KeyError, TypeError, ValueError):
             user = None
         if user is None:
@@ -111,13 +115,11 @@ class AuthService:
         if not self.verify_password(current_password, user.password_hash):
             raise AuthError("INVALID_CREDENTIALS", "当前密码错误")
         user.password_hash = self.hash_password(new_password)
-        await user.save(update_fields=["password_hash", "updated_at"])
-        await RefreshToken.filter(user=user, revoked_at=None).update(
-            revoked_at=datetime.now(timezone.utc)
-        )
+        await self._users.save(user, update_fields=["password_hash", "updated_at"])
+        await self._refresh_tokens.revoke_active_for_user(user, revoked_at=datetime.now(timezone.utc))
 
     async def me(self, user: User) -> MeResponse:
-        memberships = await ProjectMember.filter(user=user).select_related("project")
+        memberships = await self._memberships.list_for_user(user, with_project=True)
         return MeResponse(
             user=UserResponse.model_validate(user),
             projects=[
@@ -141,27 +143,19 @@ class AuthService:
             value=secrets.token_urlsafe(48),
             expires_at=now + timedelta(days=refresh_days),
         )
-        await RefreshToken.create(
+        await self._refresh_tokens.create(
             user=user,
-            token_hash=self._hash_refresh_token(refresh.value),
+            token_hash=hash_refresh_token(refresh.value),
             expires_at=refresh.expires_at,
         )
         claims = AccessTokenClaims(str(user.id), now, access_expires)
-        access_token = jwt.encode(
-            claims.as_payload(),
-            security_settings.auth_jwt_secret,
-            algorithm="HS256",
-        )
+        access_token = create_access_token(claims)
         return TokenResponse(
             access_token=access_token,
             refresh_token=refresh.value,
             expires_in=access_ttl,
             user=UserResponse.model_validate(user),
         )
-
-    @staticmethod
-    def _hash_refresh_token(value: str) -> str:
-        return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _validate_password(password: str) -> None:

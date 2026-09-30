@@ -9,6 +9,17 @@ from .project import (
     ProjectMember,
     Worldview,
     WorldviewEntry,
+    WorldviewEntryRevision,
+    TerminologyBase,
+    TerminologyTerm,
+    TerminologyTermRevision,
+)
+from .translation_memory import (
+    TranslationMemoryEntry,
+    TranslationMemoryEntryRevision,
+    TranslationMemoryEntrySource,
+    TranslationMemoryImport,
+    TranslationMemoryLibrary,
 )
 
 __all__ = [
@@ -23,4 +34,13 @@ __all__ = [
     "User",
     "Worldview",
     "WorldviewEntry",
+    "WorldviewEntryRevision",
+    "TerminologyBase",
+    "TerminologyTerm",
+    "TerminologyTermRevision",
+    "TranslationMemoryLibrary",
+    "TranslationMemoryEntry",
+    "TranslationMemoryEntryRevision",
+    "TranslationMemoryEntrySource",
+    "TranslationMemoryImport",
 ]

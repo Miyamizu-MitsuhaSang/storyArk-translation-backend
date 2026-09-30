@@ -14,7 +14,11 @@ from translation_backend.app.application.translation_memory.schemas import (
 )
 from translation_backend.app.infrastructure.translation_memory.cache import build_search_cache_key
 from translation_backend.app.application.translation_memory.service import TranslationMemoryService
-from translation_backend.app.application.translation_memory.service import TranslationMemoryCursorError
+from translation_backend.app.application.translation_memory.service import (
+    TranslationMemoryCursorError,
+    TranslationMemoryIdempotencyError,
+)
+from translation_backend.app.application.translation_memory.schemas import TranslationMemoryImportRow
 from translation_backend.app.core.config import app_settings
 from translation_backend.app.core import redis as redis_module
 from translation_backend.app.application.translation_memory.dependencies import get_translation_memory_service
@@ -176,3 +180,29 @@ def test_service_factory_binds_redis_after_lifespan_initialization(monkeypatch):
     second = get_translation_memory_service()
     assert first is not second
     assert first._cache.namespace == "delayed"
+
+
+def test_import_rejects_same_idempotency_key_with_different_payload():
+    async def scenario():
+        await Tortoise.init(
+            db_url="sqlite://:memory:",
+            modules={"models": ["translation_backend.app.models"]},
+        )
+        await Tortoise.generate_schemas()
+        try:
+            user = await User.create(
+                username="tm-idempotency", email="tm-idempotency@example.com", password_hash="hash", display_name="TM Idempotency"
+            )
+            library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM Idempotency")
+            service = TranslationMemoryService(cache=UnavailableCache())
+            first = TranslationMemoryImportRow(
+                source_language="en", target_language="zh-CN", source_text="Hello", target_text="你好"
+            )
+            second = first.model_copy(update={"target_text": "您好"})
+            await service.import_entries(user, library.id, [first], "same-key")
+            with pytest.raises(TranslationMemoryIdempotencyError):
+                await service.import_entries(user, library.id, [second], "same-key")
+        finally:
+            await Tortoise.close_connections()
+
+    asyncio.run(scenario())

@@ -1,48 +1,61 @@
-"""Shared authentication and security dependencies for API routes."""
+"""Framework-independent cryptographic helpers used by application services."""
 
-from fastapi import Depends
-from fastapi.security import OAuth2PasswordBearer
+from __future__ import annotations
 
-from ..application.auth.api_key.service import ApiKeyService
-from ..application.auth.service import AuthError, AuthService
-from .config import app_settings
-from ..models import User
+import hashlib
+from typing import Any
 
+import jwt
+from pwdlib import PasswordHash
 
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"{app_settings.api_prefix}/auth/login",
-    auto_error=False,
-)
-_auth_service = AuthService()
-_api_key_service: ApiKeyService | None = None
+from ..domain.auth.value_objects import AccessTokenClaims
+from .config import security_settings
 
 
-def get_auth_service() -> AuthService:
-    """Return the shared authentication application service."""
-    return _auth_service
+_password_hash = PasswordHash.recommended()
 
 
-def get_api_key_service() -> ApiKeyService:
-    """Return the lazily initialized API key service."""
-    global _api_key_service
-    if _api_key_service is None:
-        _api_key_service = ApiKeyService()
-    return _api_key_service
+def hash_password(password: str) -> str:
+    """Hash a plaintext password with the configured password-hashing algorithm."""
+    return _password_hash.hash(password)
 
 
-async def get_current_user(
-    token: str | None = Depends(oauth2_scheme),
-    service: AuthService = Depends(get_auth_service),
-) -> User:
-    """Resolve and validate the authenticated user from the bearer token."""
-    if not token:
-        raise AuthError("UNAUTHORIZED", "需要登录")
-    return await service.user_from_access_token(token)
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a plaintext password against a stored password hash."""
+    try:
+        return _password_hash.verify(password, password_hash)
+    except (ValueError, TypeError):
+        return False
+
+
+def hash_refresh_token(value: str) -> str:
+    """Return the one-way database representation of a refresh token."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def create_access_token(claims: AccessTokenClaims) -> str:
+    """Encode access-token claims using the configured signing secret."""
+    return jwt.encode(
+        claims.as_payload(),
+        security_settings.auth_jwt_secret,
+        algorithm="HS256",
+    )
+
+
+def decode_access_token(access_token: str) -> dict[str, Any]:
+    """Decode and signature-verify an access token, requiring its core claims."""
+    return jwt.decode(
+        access_token,
+        security_settings.auth_jwt_secret,
+        algorithms=["HS256"],
+        options={"require": ["sub", "exp", "type"]},
+    )
 
 
 __all__ = [
-    "get_api_key_service",
-    "get_auth_service",
-    "get_current_user",
-    "oauth2_scheme",
+    "create_access_token",
+    "decode_access_token",
+    "hash_password",
+    "hash_refresh_token",
+    "verify_password",
 ]

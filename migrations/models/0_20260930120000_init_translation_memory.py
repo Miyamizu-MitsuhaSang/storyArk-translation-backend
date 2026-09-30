@@ -14,7 +14,6 @@ CREATE TABLE IF NOT EXISTS translation_memory_libraries (
     name VARCHAR(160) NOT NULL,
     description TEXT NULL,
     status VARCHAR(24) NOT NULL DEFAULT 'active',
-    content_version INT NOT NULL DEFAULT 1,
     CONSTRAINT ck_tm_library_scope_owner CHECK (
         (scope = 'platform' AND owner_user_id IS NULL)
         OR (scope = 'user' AND owner_user_id IS NOT NULL)

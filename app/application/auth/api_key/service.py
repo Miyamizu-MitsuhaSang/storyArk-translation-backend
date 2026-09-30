@@ -12,6 +12,7 @@ from .schemas import (
     UpdateApiKeyRequest,
 )
 from ....models import AIProviderCredential, User
+from ....repositories import ApiKeyRepository
 
 
 class ApiKeyError(Exception):
@@ -35,17 +36,16 @@ class ApiKeyInUseError(ApiKeyError):
 
 
 class ApiKeyService:
-    def __init__(self, *, encryption_key: bytes | None = None, key_version: str | None = None) -> None:
+    def __init__(self, *, encryption_key: bytes | None = None, key_version: str | None = None, repository: ApiKeyRepository | None = None) -> None:
         self._encryption_key = encryption_key or self._load_key_from_settings()
         if len(self._encryption_key) != 32:
             raise ApiKeyEncryptionUnavailableError("API key 加密配置不可用")
         self._key_version = key_version or self._load_key_version()
+        self._repository = repository or ApiKeyRepository()
 
     async def list(self, user: User, *, page_size: int, cursor: str | None) -> ApiKeyPage:
-        query = AIProviderCredential.filter(user=user).order_by("-created_at")
-        total = await query.count()
         offset = self._decode_cursor(cursor)
-        rows = await query.offset(offset).limit(page_size)
+        rows, total = await self._repository.list_for_user(user, offset=offset, limit=page_size)
         items = [self._response(item) for item in rows]
         next_offset = offset + len(items)
         return ApiKeyPage(
@@ -64,7 +64,7 @@ class ApiKeyService:
             raise ApiKeyError("secret 不能为空")
         nonce = os.urandom(12)
         ciphertext = AESGCM(self._encryption_key).encrypt(nonce, secret.encode(), None)
-        credential = await AIProviderCredential.create(
+        credential = await self._repository.create(
             user=user,
             provider=request.provider,
             label=request.label.strip() if request.label else None,
@@ -87,13 +87,13 @@ class ApiKeyService:
             setattr(credential, model_field, value == "active" if field == "status" else value)
             update_fields.append(model_field)
         if changes:
-            await credential.save(update_fields=[*update_fields, "updated_at"])
+            await self._repository.save(credential, update_fields=update_fields)
         return self._response(credential)
 
     async def delete(self, user: User, key_id: UUID) -> None:
         credential = await self._owned(user, key_id)
         # Project key bindings will supply this check when their model is added.
-        await credential.delete()
+        await self._repository.delete(credential)
 
     async def decrypt(self, credential: AIProviderCredential) -> str:
         nonce = base64.urlsafe_b64decode(credential.encryption_nonce)
@@ -101,7 +101,7 @@ class ApiKeyService:
         return AESGCM(self._encryption_key).decrypt(nonce, ciphertext, None).decode()
 
     async def _owned(self, user: User, key_id: UUID) -> AIProviderCredential:
-        credential = await AIProviderCredential.filter(user=user, id=key_id).first()
+        credential = await self._repository.find_owned(user.id, key_id)
         if credential is None:
             raise ApiKeyNotFoundError("API key 不存在")
         return credential

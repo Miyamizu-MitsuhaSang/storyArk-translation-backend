@@ -12,15 +12,11 @@ from .....application.project.api_key.service import (
     ProjectApiKeyError,
     ProjectApiKeyService,
 )
-from .....core.security import get_current_user
+from ....shared.dependencies import get_current_user
+from .dependencies import get_project_api_key_service
 from .....models import User
 
 project_api_key_router = APIRouter(tags=["project-api-keys"])
-_project_api_key_service = ProjectApiKeyService()
-
-
-def get_project_api_key_service() -> ProjectApiKeyService:
-    return _project_api_key_service
 
 
 async def _handle_project_api_key_error(request: Request, exc: ProjectApiKeyError) -> JSONResponse:
