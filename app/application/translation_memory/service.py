@@ -150,6 +150,10 @@ class TranslationMemoryService:
             if request.match_mode == "fuzzy":
                 raise TranslationMemoryIndexUnavailableError("活动翻译记忆索引不可用") from exc
             raise
+        if request.match_mode == "exact":
+            from ...tasks.translation_memory_maintenance import increment_metric
+
+            increment_metric("tm_search_sql_fallback_total")
         response = TranslationMemorySearchResponse(
             items=matches,
             total=len(matches),

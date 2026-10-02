@@ -22,6 +22,10 @@ celery_app.conf.update(
             "task": "translation_memory.reclaim_expired_index_jobs",
             "schedule": 60.0,
         },
+        "cleanup-superseded-tm-index-artifacts": {
+            "task": "translation_memory.cleanup_superseded_artifacts",
+            "schedule": 3600.0,
+        },
     },
 )
 celery_app.autodiscover_tasks(

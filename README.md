@@ -15,7 +15,7 @@ StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 R
 | `POST` | `/api/v1/rag/index` | 构建当前进程的 RAG 索引 |
 | `POST` | `/api/v1/rag/search` | 检索索引中的文档 |
 
-完整 API 契约见 [`docs/api.md`](docs/api.md)。翻译记忆当前提供用户库 CRUD、项目有效范围、精确检索和异步重建；文档中标记为规划的导入、模糊/语义检索和工作流接口需要以后端路由及集成测试为准。运行时路由以 `/docs` 和 `/openapi.json` 为准。
+完整 API 契约见 [`docs/api.md`](docs/api.md)。翻译记忆当前提供用户库 CRUD、项目有效范围、精确/fuzzy 检索、异步重建和任务状态查询；运行时路由以 `/docs` 和 `/openapi.json` 为准。
 
 ## 环境要求
 
@@ -43,6 +43,10 @@ TM_CACHE_ENABLED=false
 TM_CACHE_NAMESPACE=tm
 TM_SEARCH_MAX_TEXT_LENGTH=4096
 TM_SEARCH_MAX_PAGE_SIZE=50
+TM_INDEX_TASKS_ENABLED=false
+TM_INDEX_STORAGE_DIR=var/tm-indexes
+TM_INDEX_MAX_ARTIFACT_BYTES=536870912
+TM_INDEX_RETENTION_COUNT=3
 # RAG 候选筛选阈值；0 保证非负稀疏权重下不丢失低权重累积匹配
 RAG_CANDIDATE_THRESHOLD=0.0
 # 各语种模型独立开关；默认关闭，关闭时只用后端分词器和 TF-IDF
@@ -105,7 +109,7 @@ AUTH_API_KEY_ENCRYPTION_KEY_VERSION=v1
 uv run aerich upgrade
 ```
 
-Redis 和 Celery 是可选的。启用 `REDIS_LAUNCH=true` 后，应用连接 `127.0.0.1:6379`；设置 `TM_CACHE_ENABLED=true` 才会使用 Redis TM 检索缓存，Redis 不可用时自动降级为无缓存查询。需要异步导入或重建索引时，另起 Celery worker，并确保 `CELERY_BROKER_URL` 和 `CELERY_RESULT_BACKEND` 可访问：
+Redis 和 Celery 是可选的。启用 `REDIS_LAUNCH=true` 后，应用连接 `127.0.0.1:6379`；设置 `TM_CACHE_ENABLED=true` 才会使用 Redis TM 检索缓存，Redis 不可用时自动降级为无缓存查询。`TM_INDEX_STORAGE_DIR` 保存本地内容寻址索引产物，`TM_INDEX_RETENTION_COUNT` 控制历史产物保留数量；清理任务不会删除活动、构建中或仍被任务引用的产物。需要异步导入或重建索引时，另起 Celery worker，并确保 `CELERY_BROKER_URL` 和 `CELERY_RESULT_BACKEND` 可访问：
 
 ```bash
 uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO

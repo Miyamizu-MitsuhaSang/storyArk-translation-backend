@@ -113,6 +113,9 @@ async def process_rebuild_index(job_id: UUID, *, worker_id: str, service=None) -
     try:
         result = await index_service.build_job(job.id, worker_id=worker_id)
     except Exception as exc:
+        from .translation_memory_maintenance import increment_metric
+
+        increment_metric("tm_index_retries_total")
         retry_delay = min(300, 2 ** max(0, job.attempts - 1))
         await job.fail(
             "INDEX_BUILD_FAILED",

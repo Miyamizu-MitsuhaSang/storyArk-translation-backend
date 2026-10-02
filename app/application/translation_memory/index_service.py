@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from time import perf_counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -185,7 +186,14 @@ class TranslationMemoryIndexService:
         return await TranslationMemoryTaskDispatcher().enqueue_rebuild(library_id, content_version)
 
     async def build_job(self, job_id: UUID, *, worker_id: str) -> dict[str, Any]:
+        from ...tasks.translation_memory_maintenance import increment_metric, observe_duration_ms
+
+        started_at = perf_counter()
         job = await BackgroundJob.get(id=job_id)
+        observe_duration_ms(
+            "tm_index_queue_latency_ms",
+            max(0.0, (datetime.now(timezone.utc) - job.created_at).total_seconds() * 1000),
+        )
         if job.type != "tm_index_rebuild" or job.resource_type != "translation_memory_library":
             raise ValueError("job is not a TM index rebuild")
         job._assert_lease_owner(worker_id, datetime.now(timezone.utc))
@@ -242,14 +250,23 @@ class TranslationMemoryIndexService:
         if published:
             result = {"status": "active", "artifact_id": str(artifact.id), "row_count": index.row_count}
         else:
+            increment_metric("tm_index_stale_builds_discarded_total")
             result = {"status": "superseded", "artifact_id": str(artifact.id), "row_count": index.row_count}
         await job.complete(worker_id=worker_id, result=result)
+        observe_duration_ms("tm_index_build_duration_ms", (perf_counter() - started_at) * 1000)
+        increment_metric("tm_index_builds_total")
         return result
 
     async def publish_if_current(self, artifact: TranslationMemoryIndexArtifact) -> bool:
         return await artifact.activate_if_current()
 
     async def load_active(self, library_id: UUID) -> TranslationMemoryIndex:
+        from ...tasks.translation_memory_maintenance import increment_metric
+
+        def unavailable(message: str) -> ValueError:
+            increment_metric("tm_index_load_failures_total")
+            return ValueError(message)
+
         artifact = await TranslationMemoryIndexArtifact.filter(
             library_id=library_id,
             status="active",
@@ -263,17 +280,17 @@ class TranslationMemoryIndexService:
             or artifact.checksum is None
             or artifact.vectorizer_version != self.backend.vectorizer_version
         ):
-            raise ValueError("active TM index is unavailable or incompatible")
+            raise unavailable("active TM index is unavailable or incompatible")
         if not self.store.exists(artifact.storage_uri):
-            raise ValueError("active TM index artifact is missing")
+            raise unavailable("active TM index artifact is missing")
         actual_checksum = self.store.checksum(artifact.storage_uri)
         if actual_checksum != artifact.checksum:
-            raise ValueError("active TM index checksum mismatch")
+            raise unavailable("active TM index checksum mismatch")
         with self.store.open(artifact.storage_uri) as stored:
             payload = stored.read(app_settings.tm_index_max_artifact_bytes + 1)
         if len(payload) > app_settings.tm_index_max_artifact_bytes:
-            raise ValueError("active TM index exceeds configured size limit")
+            raise unavailable("active TM index exceeds configured size limit")
         index = self.backend.deserialize(payload)
         if index.row_count != artifact.row_count or index.feature_count != artifact.feature_count:
-            raise ValueError("active TM index metadata mismatch")
+            raise unavailable("active TM index metadata mismatch")
         return index

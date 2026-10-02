@@ -162,19 +162,19 @@
 
 **接口：** `cleanup_superseded_artifacts()`；指标包括队列延迟、构建耗时、重试数、过期构建丢弃数、产物加载失败数和 SQL 回退数。
 
-- [ ] 测试保留活动产物、运行中任务引用产物和配置数量的历史产物。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_maintenance.py -q`。
-- [ ] 禁止删除活动、构建中或被任务引用的产物。
-- [ ] 补充 `TM_INDEX_STORAGE_DIR`、重试次数、保留数量和产物大小限制说明。
+- [x] 测试保留活动产物、运行中任务引用产物和配置数量的历史产物。
+- [x] 运行：`uv run pytest tests/test_translation_memory_maintenance.py -q`。
+- [x] 禁止删除活动、构建中或被任务引用的产物。
+- [x] 补充 `TM_INDEX_STORAGE_DIR`、重试次数、保留数量和产物大小限制说明。
 
 ### 任务 11：增加部署与重启恢复冒烟测试
 
 **文件：** 修改 `README.md`；必要时修改 `docker-compose.yml`；新建 `tests/test_translation_memory_restart.py` 和 `tests/fixtures/tm_index_artifact/`。
 
-- [ ] 测试进程重启后可加载活动产物，无需重新构建。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_restart.py -q`。
-- [ ] 分别检查数据库、artifact store、SDK 格式兼容性和 Celery broker；索引未就绪不能阻止 API 进程启动。
-- [ ] 运行完整后端测试并验证 worker 重启后的租约恢复。
+- [x] 测试进程重启后可加载活动产物，无需重新构建。
+- [x] 运行：`uv run pytest tests/test_translation_memory_restart.py -q`。
+- [x] 分别检查数据库、artifact store、SDK 格式兼容性和 Celery broker；索引未就绪不能阻止 API 进程启动。
+- [x] 运行完整后端测试并验证 worker 重启后的租约恢复。
 
 ## 阶段 6：共享对象存储与规模化
 
