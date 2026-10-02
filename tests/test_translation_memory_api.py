@@ -30,7 +30,11 @@ def test_reindex_route_declares_async_response() -> None:
     ]["post"]
 
     assert "202" in operation["responses"]
-    assert operation["responses"]["202"]["content"]["application/json"]["schema"]["type"] == "array"
+    response_schema = operation["responses"]["202"]["content"]["application/json"]["schema"]
+    assert response_schema["type"] == "array"
+    item_schema = app.openapi()["components"]["schemas"][response_schema["items"]["$ref"].rsplit("/", 1)[-1]]
+    assert {"job_id", "status", "requested_version", "type"} <= set(item_schema["required"])
+    assert item_schema["properties"]["type"]["const"] == "tm_index_rebuild"
 
 
 def test_large_import_returns_202_for_queued_job() -> None:

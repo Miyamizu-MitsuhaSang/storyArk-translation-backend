@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable, TypeAlias
 from uuid import UUID
 
+from ...core.config import app_settings
 from ...core.schemas import RagDocument, SparseVector
 from ...infrastructure.rag.sdk_adapter import RagRetriever, RagSdkAdapter
 
@@ -26,8 +27,11 @@ class RagService:
     def __init__(
         self,
         retriever_factory: Callable[[], RagRetriever] | None = None,
+        *,
+        candidate_threshold: float = 0.0,
     ) -> None:
         self._retriever_factory = retriever_factory
+        self._candidate_threshold = candidate_threshold
         self._indexes: dict[str, RagSdkAdapter] = {}
 
     def _adapter_for(self, project_id: ProjectId) -> RagSdkAdapter:
@@ -35,7 +39,10 @@ class RagService:
         adapter = self._indexes.get(key)
         if adapter is None:
             retriever = self._retriever_factory() if self._retriever_factory else None
-            adapter = RagSdkAdapter(retriever=retriever)
+            adapter = RagSdkAdapter(
+                retriever=retriever,
+                candidate_threshold=self._candidate_threshold,
+            )
             self._indexes[key] = adapter
         return adapter
 
@@ -54,7 +61,7 @@ class RagService:
         project_id: ProjectId,
         *,
         query: SparseVector,
-        top_k: int,
+        top_k: int = 5,
     ) -> list[dict]:
         key = str(project_id)
         adapter = self._indexes.get(key)
@@ -68,11 +75,11 @@ class RagService:
     def index(self, documents: list[RagDocument], num_features: int) -> dict[str, int]:
         return self.index_project("default", documents=documents, num_features=num_features)
 
-    def search(self, query: SparseVector, top_k: int) -> list[dict]:
+    def search(self, query: SparseVector, top_k: int = 5) -> list[dict]:
         return self.search_project("default", query=query, top_k=top_k)
 
 
-_default_service = RagService()
+_default_service = RagService(candidate_threshold=app_settings.rag_candidate_threshold)
 
 
 def get_rag_service() -> RagService:
@@ -92,7 +99,7 @@ def search_project(
     project_id: ProjectId,
     *,
     query: SparseVector,
-    top_k: int,
+    top_k: int = 5,
 ) -> list[dict]:
     return _default_service.search_project(project_id, query=query, top_k=top_k)
 

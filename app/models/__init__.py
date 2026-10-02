@@ -2,6 +2,7 @@ from .base import TimestampedModel
 from .ai_provider_credential import AIProviderCredential
 from .ai_usage import AIUsageRecord
 from .auth import RefreshToken, User
+from .jobs import BackgroundJob
 from .project import (
     Project,
     ProjectApiKeyBinding,
@@ -19,12 +20,14 @@ from .translation_memory import (
     TranslationMemoryEntryRevision,
     TranslationMemoryEntrySource,
     TranslationMemoryImport,
+    TranslationMemoryIndexArtifact,
     TranslationMemoryLibrary,
 )
 
 __all__ = [
     "AIProviderCredential",
     "AIUsageRecord",
+    "BackgroundJob",
     "TimestampedModel",
     "Project",
     "ProjectApiKeyBinding",
@@ -43,4 +46,5 @@ __all__ = [
     "TranslationMemoryEntryRevision",
     "TranslationMemoryEntrySource",
     "TranslationMemoryImport",
+    "TranslationMemoryIndexArtifact",
 ]

@@ -36,6 +36,8 @@ from .schemas import (
     TranslationMemoryImportRow,
     TranslationMemoryImportResult,
     JobReference,
+    TranslationMemoryReindexResponse,
+    TranslationMemoryTaskStatusResponse,
 )
 from ...infrastructure.translation_memory.search_index import TranslationMemorySearchIndex, build_effective_scope, source_hash
 from ...infrastructure.translation_memory.cache import NoopTranslationMemoryCache, RedisTranslationMemoryCache, TranslationMemoryCache, build_search_cache_key, cache_get, cache_set
@@ -44,6 +46,7 @@ from ...core.config import app_settings
 from ...application.project.service import ProjectForbiddenError, ProjectNotFoundError
 from ...repositories import ProjectRepository
 from ...models import ProjectMember
+from ...models import BackgroundJob
 
 
 class TranslationMemoryError(Exception):
@@ -133,19 +136,31 @@ class TranslationMemoryService:
             namespace=app_settings.tm_cache_namespace,
         )
         logger = logging.getLogger("translation_backend.translation_memory.search")
+        if request.match_mode == "exact":
+            try:
+                cached = await cache_get(self._cache, key)
+                if cached:
+                    logger.info("translation_memory_search cache_hit=true duration_ms=%.2f matches=cached", (perf_counter() - started_at) * 1000)
+                    return TranslationMemorySearchResponse.model_validate_json(cached)
+            except Exception:
+                logger.info("translation_memory_search cache_hit=false cache_available=false")
         try:
-            cached = await cache_get(self._cache, key)
-            if cached:
-                logger.info("translation_memory_search cache_hit=true duration_ms=%.2f matches=cached", (perf_counter() - started_at) * 1000)
-                return TranslationMemorySearchResponse.model_validate_json(cached)
-        except Exception:
-            logger.info("translation_memory_search cache_hit=false cache_available=false")
-        matches = await self._search_index.search(scope, request)
-        response = TranslationMemorySearchResponse(items=matches, total=len(matches), source_hash=source_hash(request.source_text))
-        try:
-            await cache_set(self._cache, key, response.model_dump_json(), app_settings.tm_cache_ttl_seconds)
-        except Exception:
-            logger.info("translation_memory_search cache_hit=false cache_write=false")
+            matches = await self._search_index.search(scope, request)
+        except (OSError, ValueError) as exc:
+            if request.match_mode == "fuzzy":
+                raise TranslationMemoryIndexUnavailableError("活动翻译记忆索引不可用") from exc
+            raise
+        response = TranslationMemorySearchResponse(
+            items=matches,
+            total=len(matches),
+            source_hash=source_hash(request.source_text),
+            index_status="artifact" if request.match_mode == "fuzzy" else "database",
+        )
+        if request.match_mode == "exact":
+            try:
+                await cache_set(self._cache, key, response.model_dump_json(), app_settings.tm_cache_ttl_seconds)
+            except Exception:
+                logger.info("translation_memory_search cache_hit=false cache_write=false")
         logger.info("translation_memory_search cache_hit=false duration_ms=%.2f matches=%d", (perf_counter() - started_at) * 1000, len(matches))
         return response
 
@@ -163,9 +178,55 @@ class TranslationMemoryService:
         if not scope:
             raise TranslationMemoryIndexUnavailableError("没有可重建的翻译记忆库")
         try:
-            return [self._search_index.enqueue_rebuild(item.library_id, item.content_version) for item in scope]
+            jobs: list[TranslationMemoryReindexResponse] = []
+            for item in scope:
+                job = await self._search_index.enqueue_rebuild(item.library_id, item.content_version)
+                jobs.append(TranslationMemoryReindexResponse(
+                    job_id=job.job_id,
+                    status=job.status,
+                    requested_version=item.content_version,
+                    type="tm_index_rebuild",
+                ))
+            return jobs
         except (RuntimeError, NotImplementedError) as exc:
-            raise TranslationMemoryIndexUnavailableError(str(exc)) from exc
+            raise TranslationMemoryIndexUnavailableError("索引任务队列或存储暂时不可用") from exc
+
+    async def get_job_status(self, user: User, job_id: UUID) -> TranslationMemoryTaskStatusResponse:
+        job = await BackgroundJob.filter(id=job_id, type="tm_index_rebuild").first()
+        if job is None:
+            raise TranslationMemoryNotFoundError("后台任务不存在")
+        library = await TranslationMemoryLibrary.filter(id=job.resource_id).first()
+        if library is None or (
+            library.scope == "user" and library.owner_user_id != user.id
+        ):
+            raise TranslationMemoryNotFoundError("后台任务不存在")
+        result = job.result if isinstance(job.result, dict) else None
+        safe_result = None
+        if result is not None:
+            safe_result = {
+                key: result[key]
+                for key in ("status", "artifact_id", "row_count")
+                if key in result
+            }
+        public_error_message = None
+        if job.status == "failed" and job.error_message:
+            public_error_message = {
+                "INDEX_BUILD_FAILED": "索引构建失败",
+                "RETRY_LIMIT_EXCEEDED": "任务达到重试上限",
+            }.get(job.error_code or "", "任务执行失败")
+        return TranslationMemoryTaskStatusResponse(
+            job_id=job.id,
+            type="tm_index_rebuild",
+            status=job.status,
+            requested_version=job.requested_version,
+            attempts=job.attempts,
+            max_attempts=job.max_attempts,
+            result=safe_result,
+            error_code=job.error_code,
+            error_message=public_error_message,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+        )
     async def get_or_create_user_library(self, user: User) -> TranslationMemoryLibrary:
         library = await TranslationMemoryLibrary.filter(scope="user", owner_user_id=user.id, status="active").first()
         if library:

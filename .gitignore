@@ -9,6 +9,7 @@ dist/
 
 # IDE and OS metadata
 .idea/
+models/semantic/
 .DS_Store
 
 # Runtime logs and local environment files (may contain secrets)

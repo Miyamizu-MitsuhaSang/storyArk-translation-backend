@@ -17,6 +17,12 @@ celery_app.conf.update(
     accept_content=celery_settings.accept_content,
     timezone=celery_settings.timezone,
     enable_utc=celery_settings.enable_utc,
+    beat_schedule={
+        "reclaim-expired-tm-index-jobs": {
+            "task": "translation_memory.reclaim_expired_index_jobs",
+            "schedule": 60.0,
+        },
+    },
 )
 celery_app.autodiscover_tasks(
     packages=("translation_backend.app.tasks",),

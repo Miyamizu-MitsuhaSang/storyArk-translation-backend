@@ -1,0 +1,73 @@
+from pathlib import Path
+
+from translation_backend.app.core.config import AppSettings
+
+
+def test_app_settings_reads_candidate_threshold_from_env_app(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.app"
+    env_file.write_text("CANDIDATE_THRESHOLD=0.6\n", encoding="utf-8")
+
+    settings = AppSettings(_env_file=env_file)
+
+    assert settings.rag_candidate_threshold == 0.6
+
+
+def test_app_settings_prefers_rag_candidate_threshold_name(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.app"
+    env_file.write_text(
+        "CANDIDATE_THRESHOLD=0.6\nRAG_CANDIDATE_THRESHOLD=0.2\n",
+        encoding="utf-8",
+    )
+
+    settings = AppSettings(_env_file=env_file)
+
+    assert settings.rag_candidate_threshold == 0.2
+
+
+def test_app_settings_configures_translation_memory_index_storage(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.app"
+    env_file.write_text(
+        "TM_INDEX_STORAGE_DIR=/var/lib/translation-platform/tm-indexes\n"
+        "TM_INDEX_MAX_ARTIFACT_BYTES=2097152\n"
+        "TM_INDEX_RETENTION_COUNT=7\n",
+        encoding="utf-8",
+    )
+
+    settings = AppSettings(_env_file=env_file)
+
+    assert settings.tm_index_storage_dir == Path("/var/lib/translation-platform/tm-indexes")
+    assert settings.tm_index_max_artifact_bytes == 2097152
+    assert settings.tm_index_retention_count == 7
+
+
+def test_semantic_model_switches_default_off(monkeypatch) -> None:
+    for language in ("ZH", "EN", "JA"):
+        monkeypatch.delenv(f"TM_SEMANTIC_MODEL_{language}_ENABLED", raising=False)
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.tm_semantic_model_zh_enabled is False
+    assert settings.tm_semantic_model_en_enabled is False
+    assert settings.tm_semantic_model_ja_enabled is False
+
+
+def test_semantic_model_switches_and_local_paths_are_independent(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.app"
+    env_file.write_text(
+        "TM_SEMANTIC_MODEL_ZH_ENABLED=true\n"
+        "TM_SEMANTIC_MODEL_ZH_PATH=/models/zh\n"
+        "TM_SEMANTIC_MODEL_EN_ENABLED=false\n"
+        "TM_SEMANTIC_MODEL_EN_PATH=/models/en\n"
+        "TM_SEMANTIC_MODEL_JA_ENABLED=true\n"
+        "TM_SEMANTIC_MODEL_JA_PATH=/models/ja\n",
+        encoding="utf-8",
+    )
+
+    settings = AppSettings(_env_file=env_file)
+
+    assert settings.tm_semantic_model_zh_enabled is True
+    assert settings.tm_semantic_model_en_enabled is False
+    assert settings.tm_semantic_model_ja_enabled is True
+    assert settings.tm_semantic_model_zh_path == Path("/models/zh")
+    assert settings.tm_semantic_model_en_path == Path("/models/en")
+    assert settings.tm_semantic_model_ja_path == Path("/models/ja")

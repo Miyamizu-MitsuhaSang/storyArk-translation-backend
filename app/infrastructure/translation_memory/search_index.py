@@ -13,6 +13,7 @@ from ...application.translation_memory.schemas import (
     TranslationMemorySearchRequest,
     JobReference,
 )
+from ...application.translation_memory.index_service import TranslationMemoryIndexService
 
 
 def normalize_text(value: str) -> str:
@@ -73,13 +74,82 @@ class ExactTranslationMemorySearch:
 
 
 class TranslationMemorySearchIndex(ExactTranslationMemorySearch):
-    def __init__(self, task_dispatcher: Any | None = None) -> None:
+    def __init__(
+        self,
+        task_dispatcher: Any | None = None,
+        index_service: TranslationMemoryIndexService | None = None,
+    ) -> None:
         self._task_dispatcher = task_dispatcher
+        self._index_service = index_service or TranslationMemoryIndexService()
 
-    def enqueue_rebuild(self, library_id: UUID, content_version: int) -> JobReference:
+    async def enqueue_rebuild(self, library_id: UUID, content_version: int) -> JobReference:
         if self._task_dispatcher is None:
             raise RuntimeError("translation memory index task runner is not enabled")
-        return self._task_dispatcher.enqueue_rebuild(library_id, content_version)
+        return await self._task_dispatcher.enqueue_rebuild(library_id, content_version)
+
+    async def search(
+        self,
+        scope: list[EffectiveTranslationMemoryScope],
+        request: TranslationMemorySearchRequest,
+    ) -> list[TranslationMemoryMatch]:
+        if request.match_mode == "exact":
+            return await super().search(scope, request)
+
+        allowed = {item.library_id: item for item in scope}
+        library_ids = set(allowed)
+        if request.include_library_ids is not None:
+            library_ids.intersection_update(request.include_library_ids)
+        if not library_ids:
+            return []
+
+        matches: list[TranslationMemoryMatch] = []
+        for library_id in sorted(library_ids, key=str):
+            library_scope = allowed[library_id]
+            index = await self._index_service.load_active(library_id)
+            hits = self._index_service.backend.search(
+                index,
+                request.source_text,
+                request.source_language,
+                request.target_language,
+                request.top_k,
+            )
+            hit_ids = [hit.get("entry_id") for hit in hits if isinstance(hit.get("entry_id"), str)]
+            rows = await TranslationMemoryEntry.filter(
+                id__in=hit_ids,
+                library_id=library_id,
+                status="active",
+                deleted_at=None,
+            ).select_related("library")
+            by_id = {str(row.id): row for row in rows}
+            for hit in hits:
+                entry = by_id.get(hit.get("entry_id"))
+                if entry is None:
+                    continue
+                if request.updated_after is not None and entry.updated_at < request.updated_after:
+                    continue
+                if request.updated_before is not None and entry.updated_at > request.updated_before:
+                    continue
+                score = float(hit.get("score", 0.0))
+                if score < request.min_score:
+                    continue
+                matches.append(TranslationMemoryMatch(
+                    entry_id=entry.id,
+                    library_id=entry.library_id,
+                    scope=library_scope.scope,
+                    owner_user_id=library_scope.owner_user_id,
+                    source_language=entry.source_language,
+                    target_language=entry.target_language,
+                    source_text=entry.source_text,
+                    target_text=entry.target_text,
+                    match_type="fuzzy",
+                    score=score,
+                    priority=library_scope.priority,
+                    quality_score=float((entry.metadata or {}).get("quality_score", 0) or 0),
+                    updated_at=entry.updated_at,
+                    metadata=entry.metadata or {},
+                ))
+        matches.sort(key=lambda item: (-item.score, 0 if item.scope == "user" else 1, -item.priority, -item.quality_score, -item.updated_at.timestamp()))
+        return matches[: min(request.top_k, 20)]
 
 
 async def build_effective_scope(user_id: UUID) -> list[EffectiveTranslationMemoryScope]:

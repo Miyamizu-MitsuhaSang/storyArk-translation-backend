@@ -532,7 +532,7 @@ TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平�
 
 `GET /projects/{project_id}/translation-memories` 返回当前用户在该项目可使用的 `platform` 库和自己的 `user` 库，并返回语言对、优先级、`content_version`、条目数和 `index_status`。项目成员关系是唯一有效范围来源，不能通过请求参数读取其他项目或其他用户的库。
 
-`POST /projects/{project_id}/tm/search` 当前支持精确检索：
+`POST /projects/{project_id}/tm/search` 支持数据库精确检索和已发布稀疏索引的模糊检索：
 
 ```json
 {
@@ -546,7 +546,7 @@ TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平�
 }
 ```
 
-响应包含 `source_hash`、`index_status`、条目来源和 `score`。`match_mode` 预留 `fuzzy`、`semantic` 扩展；接入向量索引后仍必须先应用项目有效范围和语言对过滤，再执行模糊或语义召回。查询文本超过服务端上限返回 `422`，索引不可用返回 `503 INDEX_NOT_AVAILABLE`。
+响应包含 `source_hash`、`index_status`、条目来源和 `score`。`match_mode` 可为 `exact` 或 `fuzzy`。`fuzzy` 仅在对应库存在兼容且校验通过的活动产物时可用；服务端先应用项目有效范围和完整语言对分区，再执行 SDK Top-K 召回并映射回仍处于 active 的 TM 条目。查询文本超过服务端上限返回 `422`，产物缺失、过期或损坏返回 `503 INDEX_NOT_AVAILABLE`。真正的 dense semantic 模式不在当前契约内。
 
 ### 7.3 confirmed segment 自动写入
 
@@ -556,7 +556,7 @@ segment 从 `approved` 转为 `confirmed` 时，工作流必须以 `origin=confi
 
 批量导入使用 `Idempotency-Key`，服务端先校验每一行并保留原始 `row`、错误 `code` 和 `message`。小于同步阈值的请求可返回 `200` `{imported,skipped,invalid_rows}`；超过阈值或需要后台 worker 时返回 `202` `{job_id,status:"queued"}`，通过 `/jobs/{job_id}` 查询最终结果。相同 key 的重试不得重复写入；已归档库返回 `409`。
 
-`POST /projects/{project_id}/translation-memories/reindex` 为异步操作，成功返回 `202` 和一个或多个 `job_id`。队列或索引后端暂不可用返回 `503 INDEX_NOT_AVAILABLE`，调用方应按 `Retry-After` 或指数退避重试，不能把 `503` 当作已提交。重建任务按 `content_version` 消费，旧版本完成后不得覆盖更新版本索引。
+`POST /projects/{project_id}/translation-memories/reindex` 为异步操作，成功返回 `202` 和一个或多个任务引用；每个引用包含 `job_id`、`status`、提交时捕获的 `requested_version` 和 `type: "tm_index_rebuild"`。队列或索引后端暂不可用返回 `503 INDEX_NOT_AVAILABLE`，调用方应按 `Retry-After` 或指数退避重试，不能把 `503` 当作已提交。重建任务按 `content_version` 消费，旧版本完成后不得覆盖更新版本索引。
 
 ### 7.5 Redis 可选缓存和大数据量演进
 
@@ -793,19 +793,21 @@ Response `200`：
 
 ### GET `/jobs/{job_id}`
 
-所有异步导入、解析、导出、索引和批量操作统一通过任务接口查询：
+当前已接入翻译记忆索引任务；其他异步任务沿用相同资源边界。索引任务返回以下脱敏字段：
 
 ```json
 {
-  "id": "job-import-123",
-  "type": "document_import",
+  "job_id": "job-index-123",
+  "type": "tm_index_rebuild",
   "status": "running",
-  "progress": 0.65,
-  "message": "正在解析第 650/1000 个 segment",
+  "requested_version": 4,
+  "attempts": 1,
+  "max_attempts": 3,
   "result": null,
-  "error": null,
+  "error_code": null,
+  "error_message": null,
   "created_at": "2026-09-20T12:00:00Z",
-  "finished_at": null
+  "updated_at": "2026-09-20T12:00:00Z"
 }
 ```
 
@@ -837,6 +839,8 @@ POST /api/v1/rag/search
 ```
 
 两个验证接口的 JSON 请求体都支持 `project_id` 字段，默认值为 `default`。后端业务层按 `project_id` 隔离进程内索引；project/document 模块应调用后端 RAG 业务函数，不要直接依赖 SDK。
+
+RAG SDK 使用非负稀疏向量执行启发式倒排候选筛选和 MIPS Top-K。`RAG_CANDIDATE_THRESHOLD` 是后端从 `env/.env.app` 启动时读取的索引级配置，默认 `0.0`，并兼容已有的 `CANDIDATE_THRESHOLD` 配置名，不属于 `/rag/search` 请求字段；提高它可能减少延迟，但会漏掉由多个低权重特征累积得到的候选。`top_k` 是查询级参数，未传时 SDK/后端默认取 `5`，业务调用无需每次显式传入。
 
 生产实现应将索引绑定到 `project_id`、语言对和版本，并通过异步任务完成重建；不能继续使用当前仅存在于进程内、重启后丢失的索引作为生产存储。
 

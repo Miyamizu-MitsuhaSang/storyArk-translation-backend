@@ -26,7 +26,8 @@ user_translation_memory_router = APIRouter(prefix="/me/translation-memories", ta
 
 
 async def _handle_translation_memory_error(request: Request, exc: TranslationMemoryError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.code, "message": str(exc), "details": {}, "request_id": getattr(request.state, "request_id", None)}})
+    headers = {"Retry-After": "5"} if exc.code == "INDEX_NOT_AVAILABLE" else None
+    return JSONResponse(status_code=exc.status_code, headers=headers, content={"error": {"code": exc.code, "message": str(exc), "details": {}, "request_id": getattr(request.state, "request_id", None)}})
 
 
 def register_translation_memory_exception_handler(app) -> None:

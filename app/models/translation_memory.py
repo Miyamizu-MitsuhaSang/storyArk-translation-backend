@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -156,3 +156,57 @@ class TranslationMemoryImport(TimestampedModel):
         table = "translation_memory_imports"
         unique_together = (("library", "user", "idempotency_key"),)
         indexes = [("library_id", "created_at")]
+
+
+class TranslationMemoryIndexArtifact(TimestampedModel):
+    library = fields.ForeignKeyField(
+        "models.TranslationMemoryLibrary",
+        related_name="index_artifacts",
+        on_delete=fields.CASCADE,
+        description="索引产物所属翻译记忆库。",
+    )
+    content_version = fields.IntField(description="构建时读取的库内容版本。")
+    format_version = fields.IntField(description="索引封装格式版本。")
+    status = fields.CharField(
+        max_length=16,
+        default="building",
+        choices=("building", "ready", "active", "superseded", "failed"),
+        description="索引产物构建和发布状态。",
+    )
+    storage_uri: str | None = fields.CharField(max_length=512, null=True, description="不透明的索引产物存储标识。")
+    checksum: str | None = fields.CharField(max_length=64, null=True, description="完整索引产物的 SHA-256。")
+    vectorizer_version = fields.CharField(max_length=64, description="确定性向量化器版本。")
+    row_count = fields.IntField(default=0, description="产物包含的 TM 条目数。")
+    feature_count = fields.IntField(default=0, description="索引特征数量。")
+    build_job = fields.ForeignKeyField(
+        "models.BackgroundJob",
+        related_name="tm_index_artifacts",
+        null=True,
+        on_delete=fields.SET_NULL,
+        description="负责构建该产物的后台任务。",
+    )
+    built_at: datetime | None = fields.DatetimeField(null=True, description="索引产物完成构建的时间。")
+    activated_at: datetime | None = fields.DatetimeField(null=True, description="索引产物成为活动版本的时间。")
+    failure_reason: str | None = fields.CharField(max_length=512, null=True, description="脱敏后的构建失败信息。")
+
+    class Meta:
+        table = "translation_memory_index_artifacts"
+        unique_together = (("library", "content_version", "format_version"),)
+        indexes = [("library_id", "status"), ("status", "built_at")]
+
+    async def activate_if_current(self) -> bool:
+        from tortoise import transactions
+
+        async with transactions.in_transaction() as connection:
+            library = await TranslationMemoryLibrary.filter(id=self.library_id).using_db(connection).select_for_update().first()
+            if library is None or library.content_version != self.content_version:
+                self.status = "superseded"
+                await self.save(using_db=connection, update_fields=["status"])
+                return False
+            if self.status not in {"building", "ready"}:
+                raise ValueError("only building or ready artifacts can be activated")
+            await type(self).filter(library_id=self.library_id, status="active").using_db(connection).update(status="superseded")
+            self.status = "active"
+            self.activated_at = datetime.now(timezone.utc)
+            await self.save(using_db=connection, update_fields=["status", "activated_at"])
+            return True

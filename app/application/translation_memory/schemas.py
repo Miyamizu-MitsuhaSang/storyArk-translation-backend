@@ -68,7 +68,7 @@ class TranslationMemoryMatch(BaseModel):
     target_language: str
     source_text: str
     target_text: str
-    match_type: Literal["exact"] = "exact"
+    match_type: Literal["exact", "fuzzy"] = "exact"
     score: float = 1.0
     priority: int = 0
     quality_score: float = 0.0
@@ -82,7 +82,7 @@ class TranslationMemorySearchRequest(BaseModel):
     target_language: str = Field(min_length=1, max_length=16)
     top_k: int = Field(default=20, ge=1, le=50)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    match_mode: Literal["exact"] = "exact"
+    match_mode: Literal["exact", "fuzzy"] = "exact"
     include_library_ids: list[UUID] | None = None
     updated_after: datetime | None = None
     updated_before: datetime | None = None
@@ -99,11 +99,6 @@ class TranslationMemorySearchResponse(BaseModel):
     total: int
     source_hash: str
     index_status: str = "database"
-
-
-class TranslationMemoryReindexResponse(BaseModel):
-    job_id: UUID
-    status: Literal["queued", "running", "failed"]
 
 
 class TranslationMemoryEntryCreateRequest(BaseModel):
@@ -176,3 +171,19 @@ class TranslationMemoryImportResult(BaseModel):
 class TranslationMemoryReindexResponse(BaseModel):
     job_id: UUID
     status: Literal["queued", "running", "failed"]
+    requested_version: int = Field(ge=1)
+    type: Literal["tm_index_rebuild"]
+
+
+class TranslationMemoryTaskStatusResponse(BaseModel):
+    job_id: UUID
+    type: Literal["tm_index_rebuild"]
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    requested_version: int = Field(ge=1)
+    attempts: int = Field(ge=0)
+    max_attempts: int = Field(ge=1)
+    result: dict[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime

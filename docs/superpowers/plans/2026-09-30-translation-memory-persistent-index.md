@@ -4,7 +4,7 @@
 
 **目标：** 构建可在进程重启后恢复、能够识别版本的 TM 索引 worker，持久化 RAG SDK 索引产物，同时保留 PostgreSQL 事实来源和 SQL 精确检索回退。
 
-**架构：** PostgreSQL 保存后台任务、索引产物和 `content_version`；Celery worker 构建不可变的版本化索引；第一阶段使用本地文件系统保存产物，后续替换为兼容 S3 的对象存储；只有版本匹配、校验通过并完成原子发布的产物才能用于语义检索。
+**架构：** PostgreSQL 保存后台任务、索引产物和 `content_version`；Celery worker 构建不可变的版本化稀疏索引；第一阶段使用本地文件系统保存产物，后续替换为兼容 S3 的对象存储；只有版本匹配、校验通过并完成原子发布的产物才能用于 fuzzy 检索。原始稠密语义检索不在此计划范围内。
 
 **技术栈：** Python 3.13、FastAPI、Tortoise ORM、Aerich、PostgreSQL、Celery/Redis、pytest、`translate-manager-rag`。
 
@@ -36,10 +36,10 @@
 
 **产出：** 固定 `BackgroundJob`、`TranslationMemoryIndexArtifact`、`IndexArtifactStore`、`TranslationMemoryIndexBackend` 和 `TranslationMemoryIndexService` 的名称及职责。
 
-- [ ] 编写契约失败测试，确认 reindex 响应包含 `job_id`、`status`、`requested_version` 和 `type=tm_index_rebuild`。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_api.py -q`，确认当前响应不完整。
-- [ ] 更新设计/API 文档中的响应结构，不在本任务实现 handler。
-- [ ] 再次运行测试并确认通过。
+- [x] 编写契约失败测试，确认 reindex 响应包含 `job_id`、`status`、`requested_version` 和 `type=tm_index_rebuild`。
+- [x] 运行：`uv run pytest tests/test_translation_memory_api.py -q`，确认当前响应不完整。
+- [x] 更新设计/API 文档中的响应结构，不在本任务实现 handler。
+- [x] 再次运行测试并确认通过。
 
 ## 阶段 1：持久化基础与任务生命周期
 
@@ -49,11 +49,11 @@
 
 **接口：** `BackgroundJob.claim()`、`BackgroundJob.complete()`、`BackgroundJob.fail()`；字段包括 `type`、`status`、`resource_type`、`resource_id`、`requested_version`、`attempts`、`max_attempts`、租约和错误信息。
 
-- [ ] 测试同一任务只能被一个 worker 领取。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_jobs.py -q`，确认模型和状态转换尚不存在。
-- [ ] 使用 `select_for_update` 实现领取、租约过期回收、成功、失败和重试上限。
-- [ ] 为 `(status, available_at)` 与 `(resource_type, resource_id, requested_version)` 建索引。
-- [ ] 运行测试，确认所有状态转换通过。
+- [x] 测试同一任务只能被一个 worker 领取。
+- [x] 运行：`uv run pytest tests/test_translation_memory_jobs.py -q`，确认模型和状态转换尚不存在。
+- [x] 使用 `select_for_update` 实现领取、租约过期回收、成功、失败和重试上限。
+- [x] 为 `(status, available_at)` 与 `(resource_type, resource_id, requested_version)` 建索引。
+- [x] 运行测试，确认所有状态转换通过。
 
 ### 任务 2：新增 TM 索引产物模型
 
@@ -61,36 +61,37 @@
 
 **接口：** `TranslationMemoryIndexArtifact`，以 `(library_id, content_version, format_version)` 唯一标识，状态包括 `building`、`ready`、`active`、`superseded`、`failed`。
 
-- [ ] 编写过期版本不能发布的失败测试。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_artifacts.py -q`。
-- [ ] 增加 `storage_uri`、`checksum`、`vectorizer_version`、`row_count`、`feature_count`、任务关联和失败原因。
-- [ ] 用事务锁定库记录；只有当前库版本等于产物版本时才激活产物，并将旧产物标记为 `superseded`。
-- [ ] 验证唯一性、活动产物替换和过期版本拒绝。
+- [x] 编写过期版本不能发布的失败测试。
+- [x] 运行：`uv run pytest tests/test_translation_memory_artifacts.py -q`。
+- [x] 增加 `storage_uri`、`checksum`、`vectorizer_version`、`row_count`、`feature_count`、任务关联和失败原因。
+- [x] 用事务锁定库记录；只有当前库版本等于产物版本时才激活产物，并将旧产物标记为 `superseded`。
+- [x] 验证唯一性、活动产物替换和过期版本拒绝。
 
 ## 阶段 2：SDK 持久化与确定性向量化
 
 ### 任务 3：增加 SDK 公开序列化 API
 
-**文件：** 修改 `../../packages/translate-manager-rag/translate_manager_rag/native.py`、`retriever.py`、`__init__.py`；测试 `../../packages/translate-manager-rag/tests/test_persistence.py`。
+**文件：** 修改 `../../packages/translate-manager-rag/translate_manager_rag/native.py`、`retriever.py`，新增 `persistence.py`；测试 `../../packages/translate-manager-rag/tests/test_persistence.py`。
 
 **接口：** `TopKMipsIndex.serialize()`、`TopKMipsIndex.deserialize(payload)`、`SparseMipsRetriever.serialize()`、`SparseMipsRetriever.deserialize(payload)`。
 
-- [ ] 先编写索引序列化往返测试。
-- [ ] 运行：`uv run --project ../../packages/translate-manager-rag pytest ../../packages/translate-manager-rag/tests/test_persistence.py -q`，确认公开方法不存在。
-- [ ] 实现带魔数、格式版本、维度和校验的二进制封装；不得 pickle native 对象。
-- [ ] 保持现有 `build/search/clear` 行为不变。
-- [ ] 运行：`uv run --project ../../packages/translate-manager-rag pytest -q`。
+- [x] 先编写索引序列化往返测试。
+- [x] 运行 `tests/test_persistence.py`，确认新 API 尚不存在。
+- [x] 实现带魔数、格式版本、维度和校验的封装；只持久化稀疏行和 JSON 文档 metadata，加载时重建 native 索引，不使用 pickle。
+- [x] 保持现有 `build/search/clear` 行为不变。
+- [x] 重建 SDK native 扩展并运行 SDK 全套测试。
+- [x] 将通过测试的 SDK 更新推送到 `storyArk-rag-sdk` 的 `main`，并验证远端 SHA。
 
 ### 任务 4：实现后端确定性向量化器
 
-**文件：** 新建 `app/infrastructure/translation_memory/vectorizer.py`、`index_format.py`；测试 `tests/test_translation_memory_vectorizer.py`。
+**文件：** 使用 `app/infrastructure/translation_memory/sentence_processing.py` 中的向量化器；新建 `app/infrastructure/translation_memory/index_format.py`；测试 `tests/test_translation_memory_sentence_processing.py` 和 `tests/test_translation_memory_index_format.py`。
 
-**接口：** `TranslationMemoryVectorizer(version)`、`fit(entries)`、`encode(text)`，以及包含词汇表和分词元数据的索引封装。
+**接口：** `TranslationMemoryVectorizer(version)`、`fit(entries: Iterable[tuple[str, str]])`、`encode(text, language) -> list[tuple[int, float]]`，以及包含词汇表和分词元数据的索引封装。默认使用后端多语言 tokenizer + 非负 TF-IDF；语言级语义开关默认关闭，开启时语义 embedding 必须先转换为 SDK 可接受的非负稀疏特征。
 
-- [ ] 测试相同文本产生相同向量，并验证 `version`。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_vectorizer.py -q`。
-- [ ] 实现统一规范化、多语言文本处理、词汇表/Token 数量限制和版本校验。
-- [ ] 向量化器版本变化时强制重建，不得解释旧产物。
+- [x] 测试相同文本产生相同向量并验证 `version`；复用已有 `sentence_processing.py` 实现和测试。
+- [x] 运行 `tests/test_translation_memory_sentence_processing.py` 和 `tests/test_translation_memory_index_format.py`。
+- [x] 实现词汇表、文档频率、tokenizer/vectorizer 版本及 SDK 索引的校验封装；特征 ID 排序稳定，向量无重复/负权重。
+- [x] 加载时要求精确匹配 `expected_vectorizer_version`，版本变化时拒绝解释旧产物。
 
 ## 阶段 3：产物存储与 worker
 
@@ -100,10 +101,10 @@
 
 **接口：** `IndexArtifactStore.put_atomic()`、`open()`、`delete()`、`exists()`、`checksum()`；实现 `LocalIndexArtifactStore(root: Path)`；增加 `tm_index_storage_dir`、`tm_index_max_artifact_bytes`、`tm_index_retention_count` 配置。
 
-- [ ] 测试内容寻址、原子写入和路径穿越防护。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_artifact_store.py -q`。
-- [ ] 使用临时文件、flush/fsync、原子重命名、大小限制和校验和验证。
-- [ ] 存储失败抛出类型化异常，供 worker 重试。
+- [x] 测试内容寻址、原子写入和路径穿越防护。
+- [x] 运行：`uv run pytest tests/test_translation_memory_artifact_store.py -q`。
+- [x] 使用临时文件、flush/fsync、原子重命名、大小限制和校验和验证。
+- [x] 存储失败抛出类型化异常，供 worker 重试。
 
 ### 任务 6：实现版本化 TM 索引构建和发布
 
@@ -111,11 +112,11 @@
 
 **接口：** `TranslationMemoryIndexBackend.build()`、`serialize()`、`deserialize(payload)`、`search()`；`TranslationMemoryIndexService.enqueue_rebuild()`、`build_job()`、`load_active()`、`publish_if_current()`。
 
-- [ ] 编写库版本在构建期间变化时不得发布的失败测试。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_index_service.py -q`。
-- [ ] 读取活动且未删除的 TM 条目，生成向量、SDK 索引、条目 ID 映射和完整封装。
-- [ ] 写入产物并计算校验和；发布前再次检查 `content_version`。
-- [ ] 验证成功构建、重复任务、校验失败、版本过期和活动产物替换。
+- [x] 编写库版本在构建期间变化时不得发布的失败测试。
+- [x] 运行：`uv run pytest tests/test_translation_memory_index_service.py -q`。
+- [x] 按语言对分别读取活动且未删除的 TM 条目，生成各自的稀疏向量、SDK retriever 和条目 ID 映射，封装到同一版本产物中；查询必须先选中语言对分区再执行 Top-K。
+- [x] 写入产物并计算校验和；发布前再次检查 `content_version`。
+- [x] 验证成功构建、重复任务、校验失败、版本过期和活动产物替换。
 
 ### 任务 7：接入 Celery 领取、重试和恢复
 
@@ -123,11 +124,11 @@
 
 **接口：** `rebuild_translation_memory_index_task(job_id)`、`TranslationMemoryTaskDispatcher.enqueue_rebuild()`、`reclaim_expired_index_jobs()`。
 
-- [ ] 编写存储临时故障触发重试的失败测试。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_worker.py -q`，确认当前占位任务会失败。
-- [ ] 使用任务 ID 作为确定性 Celery task ID，事务领取租约，并实现指数退避和重试上限。
-- [ ] 让重复投递安全，确保旧版本构建和 worker 崩溃可恢复。
-- [ ] 验证 eager 成功、重试、重复投递、租约回收、过期构建和最终失败。
+- [x] 编写存储临时故障触发重试的失败测试。
+- [x] 运行：`uv run pytest tests/test_translation_memory_worker.py -q`。
+- [x] 使用任务 ID 作为确定性 Celery task ID，事务领取租约，并实现指数退避和重试上限。
+- [x] 让重复投递安全，确保旧版本构建和 worker 崩溃可恢复。
+- [x] 验证 eager 成功、重试、重复投递、租约回收、过期构建和最终失败。
 
 ## 阶段 4：API 集成与精确检索回退
 
@@ -137,21 +138,21 @@
 
 **接口：** `POST /api/v1/projects/{project_id}/translation-memories/reindex` 返回 `202`；`GET /api/v1/jobs/{job_id}` 返回任务状态、请求版本、尝试次数及脱敏结果。
 
-- [ ] 测试 broker 或存储不可用时返回 `503 INDEX_NOT_AVAILABLE`。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_http.py -q`。
-- [ ] 实现成员权限检查、`202/503` 语义和任务状态脱敏；不暴露文件路径、存储 URI、原文或原始异常。
-- [ ] 确保 exact 查询在语义索引不可用时仍可用。
+- [x] 测试 broker 或存储不可用时返回 `503 INDEX_NOT_AVAILABLE`。
+- [x] 运行：`uv run pytest tests/test_translation_memory_http.py -q`。
+- [x] 实现成员权限检查、`202/503` 语义和任务状态脱敏；不暴露文件路径、存储 URI、原文或原始异常。
+- [x] 确保 exact 查询在语义索引不可用时仍可用。
 
 ### 任务 9：加载活动产物并开放后续检索模式
 
 **文件：** 修改 `app/application/translation_memory/service.py`、`app/infrastructure/translation_memory/search_index.py`、`app/application/translation_memory/schemas.py`；测试 `tests/test_translation_memory_search_modes.py`。
 
-**接口：** 当请求 schema 开启且存在兼容活动产物时，支持 `match_mode=fuzzy` 和 `match_mode=semantic`。
+**接口：** 仅在 schema 启用且存在兼容活动产物时支持稀疏向量 `match_mode=fuzzy`。真正的模型语义检索不属于本计划；若后续开放该能力，须单独设计并验证 dense-to-sparse 投影质量或扩展 SDK dense-vector 能力。
 
-- [ ] 测试缺少活动产物时语义检索返回 `TranslationMemoryIndexUnavailableError`。
-- [ ] 运行：`uv run pytest tests/test_translation_memory_search_modes.py -q`。
-- [ ] 先过滤项目有效库和语言对，再验证产物版本、格式版本、向量化器版本和权限。
-- [ ] 将 SDK 命中行映射回 TM 响应；过期或损坏产物返回 `503`。
+- [x] 测试缺少活动产物时 fuzzy 检索返回 `TranslationMemoryIndexUnavailableError`。
+- [x] 运行：`uv run pytest tests/test_translation_memory_search_modes.py -q`。
+- [x] 先验证项目有效库和权限，再按请求语言对选择独立分区，校验产物版本、格式版本、向量化器版本后调用 SDK。
+- [x] 将 SDK 命中行映射回 TM 响应；过期或损坏产物返回 `503`。
 
 ## 阶段 5：清理、监控和部署
 
@@ -204,6 +205,6 @@
 - [ ] 在临时 PostgreSQL 上执行 Aerich 迁移。
 - [ ] 启动 API 和 Celery worker，提交重建任务，重启 worker，验证租约恢复。
 - [ ] 构建期间修改 TM 库，确认旧版本产物不会被发布。
-- [ ] 无索引产物时确认 exact 查询可用，语义查询返回 `503`。
+- [ ] 无索引产物时确认 exact 查询可用，fuzzy 查询返回 `503`。
 - [ ] 确认产物和日志不包含凭据、API key 或未经脱敏的异常。
 - [ ] 确认最终 API 文档与生成的 OpenAPI 路径和响应描述一致。

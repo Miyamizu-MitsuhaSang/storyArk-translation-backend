@@ -25,7 +25,7 @@ StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 R
 - Git 和可用的 C++17 编译器，用于构建独立的 RAG SDK
 - Redis 可选；`REDIS_LAUNCH` 默认为 `false`
 
-`translate-manager-rag` 从 [storyArk-rag-sdk](https://github.com/Miyamizu-MitsuhaSang/storyArk-rag-sdk) 的 `main` 分支安装；SDK 源码不包含在本仓库中。
+`translate-manager-rag` 位于仓库内的 `packages/translate-manager-rag/`，通过本地 editable 依赖安装。它只负责非负稀疏向量的倒排索引和 Top-K MIPS 检索；threshold 属于索引配置，不需要每次搜索重复传入，`top_k` 属于查询参数且默认值为 5。
 
 ## 配置
 
@@ -43,7 +43,40 @@ TM_CACHE_ENABLED=false
 TM_CACHE_NAMESPACE=tm
 TM_SEARCH_MAX_TEXT_LENGTH=4096
 TM_SEARCH_MAX_PAGE_SIZE=50
+# RAG 候选筛选阈值；0 保证非负稀疏权重下不丢失低权重累积匹配
+RAG_CANDIDATE_THRESHOLD=0.0
+# 各语种模型独立开关；默认关闭，关闭时只用后端分词器和 TF-IDF
+TM_SEMANTIC_MODEL_ZH_ENABLED=false
+TM_SEMANTIC_MODEL_EN_ENABLED=false
+TM_SEMANTIC_MODEL_JA_ENABLED=false
+TM_SEMANTIC_MODEL_ZH_PATH=models/semantic/bge-small-zh-v1.5
+TM_SEMANTIC_MODEL_EN_PATH=models/semantic/bge-small-en-v1.5
+TM_SEMANTIC_MODEL_JA_PATH=models/semantic/ruri-base
 ```
+
+后端也兼容已有环境文件中的 `CANDIDATE_THRESHOLD`；两个变量同时存在时优先使用 `RAG_CANDIDATE_THRESHOLD`。
+
+### TM 语句处理与语义模型
+
+处理器默认使用后端内置 tokenizer 和 TF-IDF 生成非负稀疏向量，不需要下载模型或安装模型依赖。三个语种开关彼此独立；仅打开对应开关时才会惰性加载本地语义模型。模型生成的稠密 embedding 会先经确定性随机超平面哈希转换为非负稀疏向量，以适配 `translate-manager-rag`；原始稠密向量不会传入 SDK。该哈希是角度相似度的近似，不等同于 SDK 原生 dense cosine；模型模式仍需召回质量评测后才能用于生产。
+
+当前 TM reindex worker 和 `fuzzy` 检索使用确定性稀疏向量化与本地持久化索引；`SentenceProcessor` 的可选语义模型开关仍不会自动改变默认 TF-IDF 行为。下载模型是显式准备步骤，程序运行时只从配置目录加载，不会隐式联网。模型文件较大且受各自模型卡许可约束，下载和使用前请阅读模型卡： [BGE 中文](https://huggingface.co/BAAI/bge-small-zh-v1.5)、[BGE 英文](https://huggingface.co/BAAI/bge-small-en-v1.5)、[Ruri 日文](https://huggingface.co/cl-nagoya/ruri-base)。
+
+先安装可选模型依赖和 Hugging Face CLI：
+
+```bash
+uv sync --extra semantic
+```
+
+从后端目录分别下载需要的模型。下载路径需与 `.env.app` 中相应的 `TM_SEMANTIC_MODEL_<LANG>_PATH` 一致；不开启某语种时可跳过该模型：
+
+```bash
+uv run hf download BAAI/bge-small-zh-v1.5 --local-dir models/semantic/bge-small-zh-v1.5
+uv run hf download BAAI/bge-small-en-v1.5 --local-dir models/semantic/bge-small-en-v1.5
+uv run hf download cl-nagoya/ruri-base --local-dir models/semantic/ruri-base
+```
+
+完成下载后，在 `.env.app` 中仅将需要启用的语种开关设为 `true`。模型目录位于 Git 忽略路径 `models/semantic/`，请勿提交模型权重。
 
 `src/translation_backend/env/.env.db`：
 

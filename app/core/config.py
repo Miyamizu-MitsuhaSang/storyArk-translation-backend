@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from urllib.parse import quote
+
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -16,8 +18,27 @@ class AppSettings(BaseSettings):
     tm_cache_ttl_seconds: int = 60
     tm_cache_namespace: str = "tm"
     tm_index_tasks_enabled: bool = False
+    tm_index_storage_dir: Path = BASE_DIR / "var" / "tm-indexes"
+    tm_index_max_artifact_bytes: int = Field(default=536_870_912, gt=0)
+    tm_index_retention_count: int = Field(default=3, ge=1)
     tm_search_max_text_length: int = 4096
     tm_search_max_page_size: int = 50
+    tm_semantic_model_zh_enabled: bool = False
+    tm_semantic_model_en_enabled: bool = False
+    tm_semantic_model_ja_enabled: bool = False
+    # TODO Confirm the path of models
+    tm_semantic_model_zh_path: Path = BASE_DIR / "models" / "semantic" / "bge-small-zh-v1.5"
+    tm_semantic_model_en_path: Path = BASE_DIR / "models" / "semantic" / "bge-small-en-v1.5"
+    tm_semantic_model_ja_path: Path = BASE_DIR / "models" / "semantic" / "ruri-base"
+    # RAG 稀疏 MIPS 候选阈值。0 保证非负权重下不因启发式阈值漏掉低权重累积匹配。
+    rag_candidate_threshold: float = Field(
+        default=0.0,
+        ge=0.0,
+        validation_alias=AliasChoices(
+            "RAG_CANDIDATE_THRESHOLD",
+            "CANDIDATE_THRESHOLD",
+        ),
+    )
     model_config = SettingsConfigDict(
         # env_prefix="TRANSLATION_",
         env_file=ENV_FILE_DIR / ".env.app",

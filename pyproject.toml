@@ -19,6 +19,9 @@ dependencies = [
     "uvicorn[standard]>=0.35.0",
 ]
 
+[project.optional-dependencies]
+semantic = ["sentence-transformers>=5.0,<6.0"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",

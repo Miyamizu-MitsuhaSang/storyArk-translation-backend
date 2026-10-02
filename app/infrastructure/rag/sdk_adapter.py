@@ -16,8 +16,13 @@ class RagRetriever(Protocol):
 class RagSdkAdapter:
     """First backend layer over the external storyArk RAG SDK."""
 
-    def __init__(self, retriever: RagRetriever | None = None) -> None:
-        self._retriever = retriever or SparseMipsRetriever()
+    def __init__(
+        self,
+        retriever: RagRetriever | None = None,
+        *,
+        candidate_threshold: float = 0.0,
+    ) -> None:
+        self._retriever = retriever or SparseMipsRetriever(candidate_threshold=candidate_threshold)
 
     def index(self, documents: list[RagDocument], num_features: int) -> None:
         if hasattr(self._retriever, "build"):
@@ -32,5 +37,5 @@ class RagSdkAdapter:
     def build(self, documents: list[RagDocument], num_features: int) -> None:
         self.index(documents, num_features)
 
-    def search(self, query: SparseVector, top_k: int) -> list[dict[str, Any]]:
+    def search(self, query: SparseVector, top_k: int = 5) -> list[dict[str, Any]]:
         return self._retriever.search(query=query, top_k=top_k)
