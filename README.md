@@ -14,8 +14,56 @@ StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 R
 | `PATCH` | `/api/v1/auth/me/password` | 修改当前用户密码 |
 | `POST` | `/api/v1/rag/index` | 构建当前进程的 RAG 索引 |
 | `POST` | `/api/v1/rag/search` | 检索索引中的文档 |
+| `GET` | `/api/v1/auth/me/translation-memories` | 当前用户 TM 库列表 |
+| `POST` | `/api/v1/projects/{project_id}/tm/search` | exact/fuzzy TM 检索 |
+| `POST` | `/api/v1/projects/{project_id}/translation-memories/reindex` | 提交 TM 索引重建任务 |
+| `GET` | `/api/v1/jobs/{job_id}` | 查询 TM 索引任务状态 |
 
 完整 API 契约见 [`docs/api.md`](docs/api.md)。翻译记忆当前提供用户库 CRUD、项目有效范围、精确/fuzzy 检索、异步重建和任务状态查询；运行时路由以 `/docs` 和 `/openapi.json` 为准。
+
+## TM 功能说明
+
+翻译记忆（TM）以 PostgreSQL 中的库和条目为事实来源。索引产物只是可重建的检索加速层，不能替代 TM 数据。每个库有递增的 `content_version`；条目新增、修改或归档后版本变化，旧版本索引不能覆盖新版本索引。
+
+### 数据和权限
+
+- `platform` 库为公共库，`user` 库只属于创建者。
+- 项目成员关系决定项目可见 TM 范围；请求不能通过 `include_library_ids` 越权读取其他用户的库。
+- 只索引 `status=active` 且 `deleted_at` 为空的条目。
+- 条目保留语言、原文、译文、来源、修订号和受控 metadata；metadata 禁止保存 token、secret、API key、prompt 或 completion。
+
+### 检索模式
+
+`POST /api/v1/projects/{project_id}/tm/search` 的 `match_mode` 有两种：
+
+- `exact`：默认模式，使用 PostgreSQL 规范化原文哈希精确检索。没有 worker、索引产物或 Redis 时仍可用。
+- `fuzzy`：要求库存在与当前 `content_version`、格式版本和 vectorizer 版本匹配的活动产物。服务端先验证项目权限和库范围，再选择完整源语言/目标语言分区，调用 RAG SDK Top-K，最后回查仍 active 的 TM 条目。
+
+`fuzzy` 产物缺失、过期、checksum 不匹配、格式不兼容或文件不可读时返回 `503 INDEX_NOT_AVAILABLE`，不会使用旧缓存伪造结果。`503` 响应带 `Retry-After: 5`。当前不提供 dense semantic 检索。
+
+### 索引重建生命周期
+
+1. 启用 `TM_INDEX_TASKS_ENABLED=true` 后，reindex 请求为每个有效库捕获当前 `content_version`。
+2. dispatcher 按 `(任务类型, 库 ID, requested_version)` 幂等创建 `BackgroundJob`，Celery task ID 使用 job UUID。
+3. worker 以短租约领取任务；同一 job 不能被两个未过期 worker 同时执行。
+4. worker 按语言对构建确定性 TF-IDF 非负稀疏向量，序列化 RAG SDK 索引，写入内容寻址文件并校验 SHA-256。
+5. 发布前锁定库再次检查 `content_version`。版本不匹配时产物标记为 `superseded`，不会替换活动索引。
+6. 存储异常使用有界指数退避重试，达到上限后任务为 `failed`；之前的活动产物保留。
+7. worker 租约过期后由恢复任务重新投递。Celery Beat 每 60 秒回收过期 TM index job。
+
+任务状态接口只返回 job ID、类型、状态、请求版本、尝试次数、脱敏结果和脱敏错误，不返回文件路径、storage URI、原文或原始异常。
+
+### 持久化产物
+
+本地存储使用 `TM_INDEX_STORAGE_DIR/sha256/<sha256>`，文件名只由内容 SHA-256 生成。写入过程使用临时文件、flush、fsync 和原子重命名；读取时再次计算 checksum，并执行大小限制。路径 API 拒绝 `..`、非 SHA-256 URI 和其他不可信路径。
+
+Celery Beat 每小时运行历史产物清理：
+
+- 永不删除 `active`、`building`、`ready` 产物。
+- 不删除仍被 queued/running job 引用的产物。
+- `superseded` 和 `failed` 产物按 `TM_INDEX_RETENTION_COUNT` 保留最新历史，其余同时删除文件和数据库记录。
+
+运行指标目前是进程内计数器，包含队列延迟、构建耗时、重试、过期构建丢弃、产物加载失败、清理删除和 SQL 检索回退。它们尚未接入外部 Prometheus exporter；多进程部署时需要后续改为共享指标后端。
 
 ## 环境要求
 
@@ -43,6 +91,7 @@ TM_CACHE_ENABLED=false
 TM_CACHE_NAMESPACE=tm
 TM_SEARCH_MAX_TEXT_LENGTH=4096
 TM_SEARCH_MAX_PAGE_SIZE=50
+# false 时 reindex API 返回 503；true 时启用 Celery TM 索引任务投递
 TM_INDEX_TASKS_ENABLED=false
 TM_INDEX_STORAGE_DIR=var/tm-indexes
 TM_INDEX_MAX_ARTIFACT_BYTES=536870912
@@ -64,7 +113,7 @@ TM_SEMANTIC_MODEL_JA_PATH=models/semantic/ruri-base
 
 处理器默认使用后端内置 tokenizer 和 TF-IDF 生成非负稀疏向量，不需要下载模型或安装模型依赖。三个语种开关彼此独立；仅打开对应开关时才会惰性加载本地语义模型。模型生成的稠密 embedding 会先经确定性随机超平面哈希转换为非负稀疏向量，以适配 `translate-manager-rag`；原始稠密向量不会传入 SDK。该哈希是角度相似度的近似，不等同于 SDK 原生 dense cosine；模型模式仍需召回质量评测后才能用于生产。
 
-当前 TM reindex worker 和 `fuzzy` 检索使用确定性稀疏向量化与本地持久化索引；`SentenceProcessor` 的可选语义模型开关仍不会自动改变默认 TF-IDF 行为。下载模型是显式准备步骤，程序运行时只从配置目录加载，不会隐式联网。模型文件较大且受各自模型卡许可约束，下载和使用前请阅读模型卡： [BGE 中文](https://huggingface.co/BAAI/bge-small-zh-v1.5)、[BGE 英文](https://huggingface.co/BAAI/bge-small-en-v1.5)、[Ruri 日文](https://huggingface.co/cl-nagoya/ruri-base)。
+当前 TM reindex worker 和 `fuzzy` 检索使用确定性稀疏向量化与本地持久化索引；`SentenceProcessor` 的可选语义模型开关不会自动改变 TM worker 的默认 TF-IDF 构建。下载模型是显式准备步骤，程序运行时只从配置目录加载，不会隐式联网。模型文件较大且受各自模型卡许可约束，下载和使用前请阅读模型卡： [BGE 中文](https://huggingface.co/BAAI/bge-small-zh-v1.5)、[BGE 英文](https://huggingface.co/BAAI/bge-small-en-v1.5)、[Ruri 日文](https://huggingface.co/cl-nagoya/ruri-base)。
 
 先安装可选模型依赖和 Hugging Face CLI：
 
@@ -128,15 +177,35 @@ uv run uvicorn main:app --host 0.0.0.0 --port 8000
 
 基础连通性任务为 `translation_backend.app.tasks.health.ping`，可作为后续异步业务任务的模板。
 
-部署检查建议依次运行：
+## TM 验证命令
+
+在 `src/translation_backend` 目录运行：
 
 ```bash
-uv run pytest -q ../../tests
+# 全量后端回归
+uv run pytest -q
+
+# TM 单元、worker、索引、HTTP、维护和重启恢复测试
+uv run pytest tests/test_translation_memory_* -q
+
+# Python 编译和空白差异检查
+uv run python -m compileall -q app main.py
+git diff --check
+```
+
+测试使用临时 SQLite、临时 artifact store 和 Celery eager/任务替身验证核心行为，包括：TM 条目写入、exact 查询、索引构建、fuzzy 查询、checksum 拒绝、版本竞争、任务租约、重试、过期任务回收、产物清理和进程重启后的活动产物加载。它们不能替代真实 PostgreSQL、Redis、Celery broker、文件权限和多进程部署验证。
+
+启用真实服务后，建议依次运行：
+
+```bash
+uv run pytest -q
+uv run aerich heads
+uv run aerich upgrade
 curl -fsS http://127.0.0.1:8000/health
 curl -fsS http://127.0.0.1:8000/openapi.json >/tmp/translation-openapi.json
 ```
 
-`/health` 成功只说明进程可响应；PostgreSQL、Redis、Celery、TM 索引和外部模型仍需分别检查。不要把文档同步或容器启动成功当作业务接口已完成的证明。
+然后设置 `TM_INDEX_TASKS_ENABLED=true`，启动 Celery worker 和 Beat，提交一次 reindex，轮询 `/api/v1/jobs/{job_id}`，再使用 `match_mode=fuzzy` 验证结果。`/health` 成功只说明进程可响应；PostgreSQL、Redis、Celery、TM 索引和外部模型仍需分别检查。不要把文档同步或容器启动成功当作业务接口已完成的证明。
 
 ## Docker
 
