@@ -3,6 +3,7 @@ from .ai_provider_credential import AIProviderCredential
 from .ai_usage import AIUsageRecord
 from .auth import RefreshToken, User
 from .jobs import BackgroundJob
+from .document import Document, DocumentSegment, SegmentLock
 from .project import (
     Project,
     ProjectApiKeyBinding,
@@ -28,6 +29,9 @@ __all__ = [
     "AIProviderCredential",
     "AIUsageRecord",
     "BackgroundJob",
+    "Document",
+    "DocumentSegment",
+    "SegmentLock",
     "TimestampedModel",
     "Project",
     "ProjectApiKeyBinding",
