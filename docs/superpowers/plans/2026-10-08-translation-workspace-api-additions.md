@@ -63,6 +63,7 @@
 **Files:**
 - Modify: `app/models/project.py`（复用 `Worldview.style_guide/default_tone/version` 作为 worldview/tone/revision 来源）
 - Create: `app/models/translation_settings.py`（`TranslationRole`、`TranslationRule`、`CultureRule`）
+- Modify: `app/models/__init__.py`（注册新增模型）
 - Create: `app/application/project/translation_settings/schemas.py`
 - Create: `app/application/project/translation_settings/repository.py`
 - Create: `app/application/project/translation_settings/service.py`
@@ -80,7 +81,7 @@
 
 - [ ] **Step 1: 写失败测试。** 覆盖 `GET/PATCH /projects/{project_id}/translation-settings`、revision 冲突、模板公开目录、角色/规则/文化规则 CRUD、category 规则缺少 category、重复规则幂等和初始化确认条件。
 - [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_translation_settings_service.py tests/test_translation_settings_api.py -q`，确认路由和模型不存在或响应不匹配。
-- [ ] **Step 3: 增加模型与迁移。** 三个子资源都保存 `project_id`、稳定 UUID、业务字段、`revision`、`created_at`、`updated_at`、软删除标记；建立项目范围的唯一约束，避免重试产生重复规则。迁移不得删除已有 Worldview 数据。
+- [ ] **Step 3: 增加模型与迁移。** 三个子资源都保存 `project_id`、稳定 UUID、业务字段、`revision`、`created_at`、`updated_at`、软删除标记；建立项目范围的唯一约束，避免重试产生重复规则，并在 `app/models/__init__.py` 注册模型。迁移不得删除已有 Worldview 数据。
 - [ ] **Step 4: 实现服务。** 将 `Worldview.style_guide` 映射为 `worldview`、`default_tone` 映射为 `tone`；更新时对 Worldview `version` 加一并检查 `revision`。`owner/manager` 才能写入，translator 及以上可读。
 - [ ] **Step 5: 实现模板初始化。** 在 `templates.py` 中维护只读 `rpg` 模板目录；`confirm_replace != true` 返回 `422 CONFIRMATION_REQUIRED`，revision 不符返回 `409 VERSION_CONFLICT`，初始化写审计事件但不删除成员或模板目录。
 - [ ] **Step 6: 运行测试。** 运行 `uv run pytest tests/test_translation_settings_service.py tests/test_translation_settings_api.py -q`，并检查 OpenAPI 中所有 15.1 路径和响应模型。
@@ -118,6 +119,7 @@
 **Files:**
 - Create: `app/models/version.py`（`ProjectVersion`）
 - Modify: `app/models/document.py`（增加 nullable `version_id`；保留现有文档解析 `version` 整数，不复用其语义）
+- Modify: `app/models/__init__.py`（注册 `ProjectVersion`）
 - Create: `app/application/project/version/schemas.py`
 - Create: `app/application/project/version/service.py`
 - Create: `app/api/modules/project/version/routes.py`
@@ -137,24 +139,23 @@
 - [ ] **Step 5: 运行测试。** 运行 `uv run pytest tests/test_project_versions_api.py tests/test_document_api_contract.py -q`，检查 OpenAPI 中 15.3 的两个版本路径。
 - [ ] **Step 6: 提交。** `git add app/models/version.py app/models/document.py app/application/project/version app/api/modules/project/version app/api/modules/project/routes.py migrations/models/13_20261008_add_project_versions.py tests/test_project_versions_api.py && git commit -m "feat: add project versions and version files"`。
 
-### Task 5: 将项目 API key 绑定与翻译任务约束接通
+### Task 5: 补强项目 API key 绑定安全边界
 
 **Files:**
 - Modify: `app/application/project/api_key/service.py`、`app/application/project/api_key/schemas.py`、`app/api/modules/project/api_key/routes.py`
 - Modify: `app/repositories/api_key.py`
-- Create: `app/domain/translation_task/policies.py`
-- Test: `tests/test_project_api_key_task_binding.py`
+- Test: `tests/test_project_api_key_security.py`
 
-- [ ] **Step 1: 写失败测试。** 覆盖非本人 key 返回 `404`、inactive key 不可绑定、重复绑定幂等、同项目只有一个默认绑定、活动翻译任务引用时删除返回 `409 API_KEY_IN_USE`、删除绑定不删除用户级 credential。
-- [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_project_api_key_task_binding.py -q`。
-- [ ] **Step 3: 实现任务引用检查。** 让 delete/update 在同一事务中检查未进入 terminal 状态的 `TranslationTask`；禁止删除或停用仍被 queued/translating 任务引用的绑定，响应只返回脱敏元数据。
-- [ ] **Step 4: 收紧安全边界。** 保持用户级 API key 的 AES-256-GCM 加密和外部密钥版本；项目 API key 路由、任务结果、audit details 和异常消息增加 secret 泄露回归断言。
-- [ ] **Step 5: 运行测试并提交。** 运行 `uv run pytest tests/test_project_api_key_task_binding.py tests/test_api_key_service.py -q`；提交 `git add app/application/project/api_key app/api/modules/project/api_key app/repositories/api_key.py app/domain/translation_task tests/test_project_api_key_task_binding.py && git commit -m "feat: enforce project API key task references"`。
+- [ ] **Step 1: 写失败测试。** 覆盖非本人 key 返回 `404`、inactive key 不可绑定、重复绑定幂等、同项目只有一个默认绑定、删除绑定不删除用户级 credential，以及所有 key 响应/日志/审计不含明文 secret。
+- [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_project_api_key_security.py -q`。
+- [ ] **Step 3: 收紧绑定服务。** 保持用户级 API key 的 AES-256-GCM 加密和外部密钥版本；项目 API key 路由只接受 `api_key_id`，只返回脱敏元数据，并用事务保证默认绑定唯一。
+- [ ] **Step 4: 运行测试并提交。** 运行 `uv run pytest tests/test_project_api_key_security.py tests/test_api_key_service.py -q`；提交 `git add app/application/project/api_key app/api/modules/project/api_key app/repositories/api_key.py tests/test_project_api_key_security.py && git commit -m "feat: harden project API key bindings"`。
 
 ### Task 6: 实现 Translation tasks 创建、查询和 worker 边界
 
 **Files:**
 - Create: `app/models/translation_task.py`（`TranslationTask`、`TranslationTaskFile`）
+- Modify: `app/models/__init__.py`（注册任务模型）
 - Create: `app/application/project/translation_task/schemas.py`
 - Create: `app/application/project/translation_task/repository.py`
 - Create: `app/application/project/translation_task/service.py`
@@ -170,13 +171,13 @@
 - `TranslationTaskService.get(user, project_id, task_id) -> TranslationTaskResponse`
 - `TranslationTaskWorker.run(task_id) -> dict[str, object]`
 
-- [ ] **Step 1: 写失败测试。** 覆盖目标语言非空且不重复、目标语言不能等于源语言、文件属于项目且源语言匹配、绑定 active 且属于当前项目、owner/manager/translator 可创建、viewer/reviewer 不能创建、默认状态 `queued` 和 progress `0`。
+- [ ] **Step 1: 写失败测试。** 覆盖目标语言非空且不重复、目标语言不能等于源语言、文件属于项目且源语言匹配、绑定 active 且属于当前项目、owner/manager/translator 可创建、viewer/reviewer 不能创建、默认状态 `queued` 和 progress `0`；活动任务引用的 binding 删除/停用返回 `409 API_KEY_IN_USE`。
 - [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_translation_tasks_service.py tests/test_translation_tasks_api.py -q`。
 - [ ] **Step 3: 实现模型和迁移。** 任务保存名称、语言、状态 `queued|translating|review|completed|failed|cancelled`、整数 progress 0..100、version_id、绑定 ID 快照和创建人；文件用 join 表关联，不把文件 ID 作为不可校验 JSON。
-- [ ] **Step 4: 实现创建服务。** 在事务中锁定并验证项目文件、版本和 API key binding；用 `execute_idempotently` 防止重复任务；响应只返回 provider/label/masked_secret 和绑定 ID，不返回 credential secret。
+- [ ] **Step 4: 实现创建服务和 key 引用保护。** 在事务中锁定并验证项目文件、版本和 API key binding；用 `execute_idempotently` 防止重复任务；响应只返回 provider/label/masked_secret 和绑定 ID，不返回 credential secret。同步修改 `ProjectApiKeyService.delete/update`，检查 queued/translating 任务引用并返回 `409 API_KEY_IN_USE`。
 - [ ] **Step 5: 实现状态查询和 worker。** 客户端没有 PATCH 任务状态接口；worker 只能按允许的状态转换更新进度。provider 适配器使用明确接口，未配置 provider 时以 `PROVIDER_NOT_CONFIGURED` 失败，不伪造完成结果。
-- [ ] **Step 6: 运行测试。** 运行 `uv run pytest tests/test_translation_tasks_service.py tests/test_translation_tasks_api.py tests/test_project_api_key_task_binding.py -q`，再检查 OpenAPI 的 GET/POST 列表和 GET 详情路径。
-- [ ] **Step 7: 提交。** `git add app/models/translation_task.py app/application/project/translation_task app/api/modules/project/translation_task app/tasks/translation_tasks.py app/application/jobs/service.py app/api/modules/project/routes.py migrations/models/14_20261008_add_translation_tasks.py tests/test_translation_tasks_* && git commit -m "feat: add translation task APIs"`。
+- [ ] **Step 6: 运行测试。** 运行 `uv run pytest tests/test_translation_tasks_service.py tests/test_translation_tasks_api.py tests/test_project_api_key_security.py -q`，再检查 OpenAPI 的 GET/POST 列表和 GET 详情路径。
+- [ ] **Step 7: 提交。** `git add app/models/translation_task.py app/application/project/translation_task app/api/modules/project/translation_task app/tasks/translation_tasks.py app/application/project/api_key app/api/modules/project/api_key app/application/jobs/service.py app/api/modules/project/routes.py migrations/models/14_20261008_add_translation_tasks.py tests/test_translation_tasks_* tests/test_project_api_key_security.py && git commit -m "feat: add translation task APIs"`。
 
 ### Task 7: 完成 AI usage analytics 和可选 Redis 缓存
 
