@@ -33,7 +33,21 @@ def test_project_translation_memory_module_is_removed():
     ) is None
 
 
-def test_jobs_use_tm_module_dependency():
-    assert jobs_routes.get_translation_memory_service.__module__.endswith(
-        "project.project_content.tm.dependencies"
-    )
+def test_api_service_compatibility_modules_are_removed():
+    for module in (
+        "translation_backend.app.api.modules.auth.service",
+        "translation_backend.app.api.modules.auth.api_key.service",
+        "translation_backend.app.api.modules.project.service",
+        "translation_backend.app.api.modules.project.api_key.service",
+        "translation_backend.app.api.modules.project.project_content.context.service",
+        "translation_backend.app.api.modules.project.project_content.terminology.service",
+        "translation_backend.app.api.modules.project.project_content.worldview.service",
+        "translation_backend.app.api.modules.rag.service",
+        "translation_backend.app.api.modules.rag.sdk_adapter",
+        "translation_backend.app.application.translation_memory.dependencies",
+    ):
+        assert importlib.util.find_spec(module) is None
+
+
+def test_jobs_module_does_not_export_translation_memory_dependencies():
+    assert not hasattr(jobs_routes, "get_translation_memory_service")

@@ -11,6 +11,7 @@ try:
     from .app.api.modules.project.routes import register_project_exception_handler
     from .app.api.modules.project.api_key.routes import register_project_api_key_exception_handler
     from .app.api.modules.project.document.routes import register_document_exception_handler
+    from .app.api.shared.errors import register_shared_exception_handlers
     from .app.api.router import api_router
     from .app.core.config import app_settings
     from .app.core.database import TORTOISE_ORM
@@ -22,6 +23,7 @@ except ImportError:
     from app.api.modules.project.routes import register_project_exception_handler
     from app.api.modules.project.api_key.routes import register_project_api_key_exception_handler
     from app.api.modules.project.document.routes import register_document_exception_handler
+    from app.api.shared.errors import register_shared_exception_handlers
     from app.api.router import api_router
     from app.core.config import app_settings
     from app.core.database import TORTOISE_ORM
@@ -79,6 +81,7 @@ register_api_key_exception_handler(app)
 register_project_exception_handler(app)
 register_project_api_key_exception_handler(app)
 register_document_exception_handler(app)
+register_shared_exception_handlers(app)
 
 if __name__ == '__main__':
     uvicorn.run(app, host="127.0.0.1", port=8000, workers=2, reload=True)

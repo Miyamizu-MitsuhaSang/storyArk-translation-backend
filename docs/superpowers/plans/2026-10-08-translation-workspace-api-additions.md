@@ -51,11 +51,11 @@
 - `decode_cursor(cursor: str | None) -> int` / `encode_cursor(offset: int) -> str`
 - `expected_revision(request: Request, body_revision: int | None) -> int | None`
 
-- [ ] **Step 1: 写失败测试。** 覆盖 viewer 访问配置读取成功、非成员得到 `404`、translator 访问管理写入得到 `403`、非法游标得到统一 `422`、重复幂等键请求体不一致得到 `409`。
-- [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_translation_workspace_contract.py -q`，确认共享依赖和异常响应尚未满足断言。
-- [ ] **Step 3: 实现共享辅助。** 复用现有 `ProjectRepository.find_membership` 和 `ProjectPolicy`，不要在路由中直接查询 `ProjectMember`；将资源不可见错误统一转换为已有 `{error:{code,message,details,request_id}}` 形状。
-- [ ] **Step 4: 实现并验证幂等。** 对创建、批量、导入、导出和任务接口调用 `execute_idempotently`；相同 key 且 payload 相同重放第一次响应，相同 key 且 payload 不同返回 `409`。
-- [ ] **Step 5: 运行测试。** 运行 `uv run pytest tests/test_translation_workspace_contract.py tests/test_idempotency_redis.py -q`。
+- [x] **Step 1: 写失败测试。** 覆盖 viewer 访问配置读取成功、非成员得到 `404`、translator 访问管理写入得到 `403`、非法游标得到统一 `422`、重复幂等键请求体不一致得到 `409`。
+- [x] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_translation_workspace_contract.py -q`，确认共享依赖和异常响应尚未满足断言。
+- [x] **Step 3: 实现共享辅助。** 复用现有 `ProjectRepository.find_membership` 和 `ProjectPolicy`，不要在路由中直接查询 `ProjectMember`；将资源不可见错误统一转换为已有 `{error:{code,message,details,request_id}}` 形状。
+- [x] **Step 4: 实现并验证幂等。** 对创建、批量、导入、导出和任务接口调用 `execute_idempotently`；相同 key 且 payload 相同重放第一次响应，相同 key 且 payload 不同返回 `409`。
+- [x] **Step 5: 运行测试。** 运行 `uv run pytest tests/test_translation_workspace_contract.py tests/test_idempotency_redis.py -q`。
 - [ ] **Step 6: 提交。** `git add app/core/schemas.py app/api app/application/idempotency.py tests/test_translation_workspace_contract.py && git commit -m "feat: add translation workspace API contract foundations"`。
 
 ### Task 2: 实现 Translation settings

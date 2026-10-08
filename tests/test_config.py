@@ -3,6 +3,30 @@ from pathlib import Path
 from translation_backend.app.core.config import AppSettings, DatabaseSettings
 
 
+def test_auth_http_dependencies_are_owned_by_api_layer() -> None:
+    from translation_backend.app.api import shared
+    from translation_backend.app.api.shared import dependencies
+    from translation_backend.app.core import security
+
+    assert dependencies.get_current_user.__module__ == dependencies.__name__
+    assert dependencies.get_auth_service.__module__ == dependencies.__name__
+    assert dependencies.oauth2_scheme is not None
+    assert not hasattr(security, "get_current_user")
+    assert not hasattr(security, "get_auth_service")
+    assert not hasattr(security, "oauth2_scheme")
+
+
+def test_user_api_key_service_factory_is_owned_by_api_key_module() -> None:
+    from translation_backend.app.api.modules.auth.api_key import dependencies
+    from translation_backend.app.core import security
+
+    service = dependencies.get_api_key_service()
+
+    assert service.__class__.__name__ == "ApiKeyService"
+    assert dependencies.get_api_key_service.__module__ == dependencies.__name__
+    assert not hasattr(security, "get_api_key_service")
+
+
 def test_app_settings_reads_shared_redis_configuration_from_env_app(tmp_path: Path) -> None:
     env_file = tmp_path / ".env.app"
     env_file.write_text(

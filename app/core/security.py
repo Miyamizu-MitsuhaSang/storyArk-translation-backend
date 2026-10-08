@@ -6,21 +6,13 @@ import hashlib
 from typing import Any
 
 import jwt
-from fastapi import Depends
-from fastapi.security import OAuth2PasswordBearer
 from pwdlib import PasswordHash
 
 from ..domain.auth.value_objects import AccessTokenClaims
-from .config import app_settings, security_settings
+from .config import security_settings
 
 
 _password_hash = PasswordHash.recommended()
-oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl=f"{app_settings.api_prefix}/auth/login",
-    auto_error=False,
-)
-_auth_service = None
-_api_key_service = None
 
 
 def hash_password(password: str) -> str:
@@ -60,46 +52,10 @@ def decode_access_token(access_token: str) -> dict[str, Any]:
     )
 
 
-def get_auth_service():
-    """Return the shared authentication application service."""
-    global _auth_service
-    if _auth_service is None:
-        from ..application.auth.service import AuthService
-
-        _auth_service = AuthService()
-    return _auth_service
-
-
-async def get_current_user(
-    token: str | None = Depends(oauth2_scheme),
-    service=Depends(get_auth_service),
-):
-    """Resolve and validate the authenticated user from the bearer token."""
-    if not token:
-        from ..application.auth.service import AuthError
-
-        raise AuthError("UNAUTHORIZED", "需要登录")
-    return await service.user_from_access_token(token)
-
-
-def get_api_key_service():
-    """Return the shared user API-key application service."""
-    global _api_key_service
-    if _api_key_service is None:
-        from ..application.auth.api_key.service import ApiKeyService
-
-        _api_key_service = ApiKeyService()
-    return _api_key_service
-
-
 __all__ = [
     "create_access_token",
     "decode_access_token",
     "hash_password",
     "hash_refresh_token",
     "verify_password",
-    "get_api_key_service",
-    "get_auth_service",
-    "get_current_user",
-    "oauth2_scheme",
 ]

@@ -1,6 +1,32 @@
-from typing import Any, TypeAlias
+from typing import Any, Generic, TypeAlias, TypeVar
 
 from pydantic import BaseModel, Field
+
+
+PageItem = TypeVar("PageItem")
+
+
+class CursorPage(BaseModel, Generic[PageItem]):
+    """Shared cursor pagination envelope for project-scoped list APIs."""
+
+    items: list[PageItem]
+    next_cursor: str | None
+    total: int = Field(ge=0)
+
+
+class ApiErrorBody(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    request_id: str | None = None
+
+
+class ApiErrorResponse(BaseModel):
+    error: ApiErrorBody
+
+
+class VersionConflictDetails(BaseModel):
+    current_revision: int = Field(ge=1)
 
 
 SparseVector: TypeAlias = list[tuple[int, float]]

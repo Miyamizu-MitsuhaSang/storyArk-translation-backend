@@ -39,14 +39,15 @@ project_router.include_router(project_audit_router, tags=["audit"])
 
 
 async def _handle_project_error(request: Request, exc: ProjectError) -> JSONResponse:
+    request_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "error": {
                 "code": exc.code,
                 "message": str(exc),
-                "details": {},
-                "request_id": getattr(request.state, "request_id", None),
+                "details": getattr(exc, "details", {}),
+                "request_id": request_id,
             }
         },
     )

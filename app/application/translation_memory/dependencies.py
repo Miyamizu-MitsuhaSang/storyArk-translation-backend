@@ -1,5 +1,0 @@
-from .service import TranslationMemoryService
-
-
-def get_translation_memory_service() -> TranslationMemoryService:
-    return TranslationMemoryService()

@@ -11,8 +11,6 @@ from ....application.project.document.schemas import DocumentTaskStatusResponse
 from ....application.translation_memory.schemas import TranslationMemoryTaskStatusResponse
 from ....models import User
 from ...shared.dependencies import get_current_user
-# Kept as a compatibility export for existing integrations; runtime job handling uses JobsService.
-from ..project.project_content.tm.dependencies import get_translation_memory_service
 from .dependencies import get_jobs_service
 
 jobs_router = APIRouter(prefix="/jobs", tags=["jobs"])

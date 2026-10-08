@@ -26,6 +26,13 @@ return 0
 class IdempotencyConflictError(Exception):
     """The same idempotency key was used for a different or unfinished operation."""
 
+    status_code = 409
+    code = "IDEMPOTENCY_CONFLICT"
+
+    def __init__(self, message: str, *, details: dict[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
+
 
 def request_fingerprint(payload: object) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)

@@ -35,6 +35,10 @@ class ProjectError(Exception):
     status_code = 400
     code = "PROJECT_ERROR"
 
+    def __init__(self, message: str, *, details: dict[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.details = details or {}
+
 
 class ProjectNotFoundError(ProjectError):
     status_code = 404

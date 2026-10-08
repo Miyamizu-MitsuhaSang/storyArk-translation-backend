@@ -21,7 +21,7 @@ from translation_backend.app.application.translation_memory.service import (
 from translation_backend.app.application.translation_memory.schemas import TranslationMemoryImportRow
 from translation_backend.app.core.config import app_settings
 from translation_backend.app.core import redis as redis_module
-from translation_backend.app.application.translation_memory.dependencies import get_translation_memory_service
+from translation_backend.app.api.modules.project.project_content.tm.dependencies import get_translation_memory_service
 from translation_backend.app.infrastructure.translation_memory.search_index import source_hash
 from translation_backend.app.infrastructure.translation_memory.cache import RedisTranslationMemoryCache
 from translation_backend.app.models import Project, ProjectMember, TranslationMemoryEntry, TranslationMemoryLibrary, User
