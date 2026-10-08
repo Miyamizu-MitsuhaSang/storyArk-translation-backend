@@ -64,6 +64,7 @@
 - Modify: `app/models/project.py`（复用 `Worldview.style_guide/default_tone/version` 作为 worldview/tone/revision 来源）
 - Create: `app/models/translation_settings.py`（`TranslationRole`、`TranslationRule`、`CultureRule`）
 - Modify: `app/models/__init__.py`（注册新增模型）
+- Create: `app/application/project/translation_settings/__init__.py`、`app/api/modules/project/translation_settings/__init__.py`
 - Create: `app/application/project/translation_settings/schemas.py`
 - Create: `app/application/project/translation_settings/repository.py`
 - Create: `app/application/project/translation_settings/service.py`
@@ -78,6 +79,8 @@
 - `TranslationSettingsService.update(user, project_id, request, expected_revision) -> TranslationSettingsResponse`
 - `TranslationSettingsService.list_roles/list_rules/list_culture_rules(...) -> Page[...]`
 - `TranslationSettingsService.initialize(user, project_id, template_id, expected_revision, confirm_replace, idempotency_key) -> TranslationSettingsResponse`
+
+**Routes covered:** `/projects/{project_id}/translation-settings`、`/roles`、`/roles/{role_id}`、`/rules`、`/rules/{rule_id}`、`/culture-rules`、`/culture-rules/{rule_id}`、`GET /translation-templates`、`POST /projects/{project_id}/translation-settings/initialize`。
 
 - [ ] **Step 1: 写失败测试。** 覆盖 `GET/PATCH /projects/{project_id}/translation-settings`、revision 冲突、模板公开目录、角色/规则/文化规则 CRUD、category 规则缺少 category、重复规则幂等和初始化确认条件。
 - [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_translation_settings_service.py tests/test_translation_settings_api.py -q`，确认路由和模型不存在或响应不匹配。
@@ -106,6 +109,8 @@
 - `TerminologyWorkflowService.extract(...) -> JobStatusResponse`
 - `TerminologyWorkflowService.mine(...) -> JobStatusResponse`
 
+**Routes covered:** `/projects/{project_id}/terminology-bases/{base_id}/terms/import`, `/terms/export`, `/terms/bulk-action`, `/terms/clear`, `/projects/{project_id}/terminology/extract`, `/projects/{project_id}/terminology/mine`。
+
 - [ ] **Step 1: 写失败测试。** 覆盖 CSV/JSON 行号保留、`update|skip|error` 冲突策略、无效行不静默丢弃、文件流安全文件名、`term_ids` 1..100、delete 二次确认、expected revisions、expected count、跨项目文件/TM 拒绝和 job 类型。
 - [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_terminology_workflows.py tests/test_terminology_jobs.py -q`。
 - [ ] **Step 3: 实现同步路径。** 复用 TerminologyRepository 和已有 revision/audit 逻辑；导入在单个事务中写入，返回 `created/updated/skipped/invalid_rows`；导出只读取当前项目术语，使用 CSV/JSON 序列化并设置安全 `Content-Disposition`。
@@ -120,6 +125,7 @@
 - Create: `app/models/version.py`（`ProjectVersion`）
 - Modify: `app/models/document.py`（增加 nullable `version_id`；保留现有文档解析 `version` 整数，不复用其语义）
 - Modify: `app/models/__init__.py`（注册 `ProjectVersion`）
+- Create: `app/application/project/version/__init__.py`、`app/api/modules/project/version/__init__.py`
 - Create: `app/application/project/version/schemas.py`
 - Create: `app/application/project/version/service.py`
 - Create: `app/api/modules/project/version/routes.py`
@@ -131,6 +137,8 @@
 - `VersionService.list(user, project_id, q, sort, page_size, cursor) -> VersionPage`
 - `VersionService.create(user, project_id, request) -> VersionResponse`
 - `VersionService.list_files(user, project_id, version_id, page_size, cursor) -> FilePage`
+
+**Routes covered:** `GET/POST /projects/{project_id}/versions`、`GET /projects/{project_id}/versions/{version_id}/files`。
 
 - [ ] **Step 1: 写失败测试。** 覆盖名称重复 `409 VERSION_NAME_EXISTS`、排序/游标、版本跨项目 `404`、空版本返回空列表、文件只返回当前项目且字段为 `id/name/source_language/format/updated_at/size_bytes`。
 - [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_project_versions_api.py -q`。
@@ -156,6 +164,7 @@
 **Files:**
 - Create: `app/models/translation_task.py`（`TranslationTask`、`TranslationTaskFile`）
 - Modify: `app/models/__init__.py`（注册任务模型）
+- Create: `app/application/project/translation_task/__init__.py`、`app/api/modules/project/translation_task/__init__.py`
 - Create: `app/application/project/translation_task/schemas.py`
 - Create: `app/application/project/translation_task/repository.py`
 - Create: `app/application/project/translation_task/service.py`
@@ -171,6 +180,8 @@
 - `TranslationTaskService.get(user, project_id, task_id) -> TranslationTaskResponse`
 - `TranslationTaskWorker.run(task_id) -> dict[str, object]`
 
+**Routes covered:** `GET/POST /projects/{project_id}/translation-tasks`、`GET /projects/{project_id}/translation-tasks/{task_id}`。
+
 - [ ] **Step 1: 写失败测试。** 覆盖目标语言非空且不重复、目标语言不能等于源语言、文件属于项目且源语言匹配、绑定 active 且属于当前项目、owner/manager/translator 可创建、viewer/reviewer 不能创建、默认状态 `queued` 和 progress `0`；活动任务引用的 binding 删除/停用返回 `409 API_KEY_IN_USE`。
 - [ ] **Step 2: 运行失败测试。** 运行 `uv run pytest tests/test_translation_tasks_service.py tests/test_translation_tasks_api.py -q`。
 - [ ] **Step 3: 实现模型和迁移。** 任务保存名称、语言、状态 `queued|translating|review|completed|failed|cancelled`、整数 progress 0..100、version_id、绑定 ID 快照和创建人；文件用 join 表关联，不把文件 ID 作为不可校验 JSON。
@@ -185,6 +196,7 @@
 - Modify: `app/models/ai_usage.py`、`app/repositories/usage.py`（非负约束、不可变写入、过滤和聚合接口）
 - Create: `app/application/analytics/schemas.py`
 - Create: `app/application/analytics/service.py`
+- Create: `app/application/analytics/__init__.py`、`app/api/modules/analytics/__init__.py`
 - Create: `app/infrastructure/analytics/cache.py`
 - Create: `app/api/modules/analytics/routes.py`
 - Modify: `app/api/router.py`、`app/api/modules/project/routes.py`、`app/models/__init__.py`
