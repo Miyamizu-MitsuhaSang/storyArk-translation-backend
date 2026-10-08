@@ -8,7 +8,15 @@ from tortoise import fields
 from .base import TimestampedModel
 
 
-DOCUMENT_STATUSES = ("uploaded", "parsing", "ready", "failed", "archived")
+DOCUMENT_STATUSES = (
+    "uploaded",
+    "parsing",
+    "ready",
+    "failed",
+    "archived",
+    "deletion_pending",
+    "purged",
+)
 DOCUMENT_FORMATS = ("xliff", "csv", "json", "po", "txt", "unknown")
 DOCUMENT_SEGMENT_STATUSES = (
     "untranslated",
@@ -16,6 +24,7 @@ DOCUMENT_SEGMENT_STATUSES = (
     "reviewed",
     "approved",
     "rejected",
+    "confirmed",
     "archived",
 )
 DOCUMENT_WORKFLOW_STATES = ("draft", "in_review", "approved", "rejected")
@@ -67,7 +76,7 @@ class Document(TimestampedModel):
         max_length=24,
         choices=DOCUMENT_STATUSES,
         default="uploaded",
-        description="文档状态：uploaded、parsing、ready、failed 或 archived。",
+        description="文档状态：uploaded、parsing、ready、failed、archived、deletion_pending 或 purged。",
     )
     version = fields.IntField(default=1, description="文档解析版本，从 1 开始递增。")
     segment_count = fields.IntField(default=0, description="文档当前片段总数，用于列表统计。")
@@ -88,6 +97,10 @@ class Document(TimestampedModel):
         null=True,
         description="最近一次成功解析完成的时间。",
     )
+    archived_at: datetime | None = fields.DatetimeField(
+        null=True,
+        description="文档归档时间。",
+    )
     deleted_at: datetime | None = fields.DatetimeField(
         null=True,
         description="文档软删除时间；为空表示文档未标记删除。",
@@ -95,6 +108,10 @@ class Document(TimestampedModel):
     purge_after: datetime | None = fields.DatetimeField(
         null=True,
         description="文档允许被定期物理清除的时间；为空表示暂不自动清除。",
+    )
+    purged_at: datetime | None = fields.DatetimeField(
+        null=True,
+        description="文件本体实际清理完成时间。",
     )
 
     class Meta:
@@ -126,7 +143,7 @@ class DocumentSegment(TimestampedModel):
         max_length=24,
         choices=DOCUMENT_SEGMENT_STATUSES,
         default="untranslated",
-        description="片段翻译状态：untranslated、translated、reviewed、approved、rejected 或 archived。",
+        description="片段翻译状态：untranslated、translated、reviewed、approved、rejected、confirmed 或 archived。",
     )
     workflow_state = fields.CharField(
         max_length=24,
@@ -148,6 +165,22 @@ class DocumentSegment(TimestampedModel):
     review_notes: list[dict[str, Any]] = fields.JSONField(
         default=list,
         description="片段审校备注列表；不得存储密钥或其他敏感凭据。",
+    )
+    translator_note: str | None = fields.TextField(
+        null=True,
+        description="译员当前备注；可在保存草稿时更新。",
+    )
+    qa_results: dict[str, Any] = fields.JSONField(
+        default=dict,
+        description="最近一次 QA 结果摘要和问题列表。",
+    )
+    qa_checked_at: datetime | None = fields.DatetimeField(
+        null=True,
+        description="最近一次 QA 检查时间。",
+    )
+    change_history: list[dict[str, Any]] = fields.JSONField(
+        default=list,
+        description="受限长度的片段变更摘要，不保存原文输入输出。",
     )
     version = fields.IntField(default=1, description="片段当前编辑版本，用于乐观锁。")
     translated_at: datetime | None = fields.DatetimeField(
@@ -204,3 +237,27 @@ class SegmentLock(TimestampedModel):
     class Meta:
         table = "segment_locks"
         indexes = [("locked_until",), ("user_id", "locked_until")]
+
+
+class SegmentSuggestion(TimestampedModel):
+    """Persisted deterministic CAT suggestion and its evidence snapshot."""
+
+    segment = fields.ForeignKeyField(
+        "models.DocumentSegment",
+        related_name="suggestions",
+        on_delete=fields.CASCADE,
+        description="建议所属片段；片段删除时一并删除建议。",
+    )
+    source = fields.CharField(max_length=32, description="建议来源，如 tm、terminology 或 worldview。")
+    text = fields.TextField(description="建议译文文本。")
+    score = fields.FloatField(default=0, description="建议排序分数。")
+    evidence: list[dict[str, Any]] = fields.JSONField(default=list, description="建议证据引用。")
+    warnings: list[str] = fields.JSONField(default=list, description="建议警告代码。")
+    provider = fields.CharField(max_length=64, default="internal", description="生成建议的 provider 快照。")
+    model: str | None = fields.CharField(max_length=128, null=True, description="生成建议的模型快照。")
+    context_version: str | None = fields.CharField(max_length=128, null=True, description="上下文版本快照。")
+    latency_ms: int | None = fields.IntField(null=True, description="建议生成耗时毫秒数。")
+
+    class Meta:
+        table = "segment_suggestions"
+        indexes = [("segment_id", "created_at"), ("source", "created_at")]

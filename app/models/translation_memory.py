@@ -120,6 +120,7 @@ class TranslationMemoryEntrySource(TimestampedModel):
     project_id: UUID | None = fields.UUIDField(null=True, description="来源项目 ID 快照。")
     document_id: UUID | None = fields.UUIDField(null=True, description="来源文档 ID 快照。")
     segment_id: UUID | None = fields.UUIDField(null=True, description="来源片段 ID 快照。")
+    invalidated_at: datetime | None = fields.DatetimeField(null=True, description="来源失效时间；撤销确认时设置。")
     metadata: dict[str, Any] = fields.JSONField(
         default=dict,
         description="受控来源元数据；不得存储 API key、令牌或其他秘密。",

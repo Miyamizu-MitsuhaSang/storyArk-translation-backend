@@ -42,7 +42,7 @@ def test_reindex_returns_503_contract_when_dispatcher_is_unavailable():
             raise TranslationMemoryIndexUnavailableError("broker unavailable")
 
     async def scenario():
-        from translation_backend.app.api.modules.project.project_content.translation_memory.routes import (
+        from translation_backend.app.api.modules.project.project_content.tm.routes import (
             reindex_translation_memories,
         )
 

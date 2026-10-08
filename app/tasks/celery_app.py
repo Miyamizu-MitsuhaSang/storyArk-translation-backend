@@ -5,7 +5,12 @@ from ..core.config import celery_settings
 
 celery_app = Celery(
     "translation_platform",
-    include=("translation_backend.app.tasks.health", "translation_backend.app.tasks.translation_memory"),
+    include=(
+        "translation_backend.app.tasks.health",
+        "translation_backend.app.tasks.translation_memory",
+        "translation_backend.app.tasks.documents",
+        "translation_backend.app.tasks.cat",
+    ),
 )
 celery_app.conf.update(
     broker_url=celery_settings.broker_url,
@@ -24,6 +29,10 @@ celery_app.conf.update(
         },
         "cleanup-superseded-tm-index-artifacts": {
             "task": "translation_memory.cleanup_superseded_artifacts",
+            "schedule": 3600.0,
+        },
+        "cleanup-due-documents": {
+            "task": "documents.cleanup_due",
             "schedule": 3600.0,
         },
     },

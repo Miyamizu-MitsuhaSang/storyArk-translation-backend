@@ -1,6 +1,35 @@
 from pathlib import Path
 
-from translation_backend.app.core.config import AppSettings
+from translation_backend.app.core.config import AppSettings, DatabaseSettings
+
+
+def test_app_settings_reads_shared_redis_configuration_from_env_app(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.app"
+    env_file.write_text(
+        "REDIS_ENABLED=true\n"
+        "REDIS_URL=redis://redis.internal:6379/7\n",
+        encoding="utf-8",
+    )
+
+    settings = AppSettings(_env_file=env_file)
+
+    assert settings.redis_enabled is True
+    assert settings.redis_url == "redis://redis.internal:6379/7"
+
+
+def test_database_settings_does_not_expose_redis_configuration(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env.db"
+    env_file.write_text(
+        "DB_USER=postgres\n"
+        "REDIS_ENABLED=true\n"
+        "REDIS_URL=redis://redis.internal:6379/7\n",
+        encoding="utf-8",
+    )
+
+    settings = DatabaseSettings(_env_file=env_file)
+
+    assert not hasattr(settings, "redis_enabled")
+    assert not hasattr(settings, "redis_url")
 
 
 def test_app_settings_reads_candidate_threshold_from_env_app(tmp_path: Path) -> None:

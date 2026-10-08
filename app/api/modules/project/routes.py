@@ -6,6 +6,9 @@ from starlette.responses import JSONResponse, Response
 from uuid import UUID
 
 from .api_key.routes import project_api_key_router
+from .document.routes import project_document_router
+from .audit_routes import project_audit_router
+from .cat.router import project_cat_router
 from ...shared.dependencies import get_current_user
 from .dependencies import get_project_service
 from ....application.project.schemas import (
@@ -29,7 +32,10 @@ from ....models import User
 
 project_router = APIRouter(prefix="/projects", tags=["projects"])
 project_router.include_router(project_api_key_router, prefix="/{project_id}/api-keys", tags=["api-key"])
+project_router.include_router(project_document_router, prefix="/{project_id}/documents", tags=["documents"])
+project_router.include_router(project_cat_router, prefix="/{project_id}", tags=["cat"])
 project_router.include_router(project_content_router, prefix="/{project_id}", tags=["content"])
+project_router.include_router(project_audit_router, tags=["audit"])
 
 
 async def _handle_project_error(request: Request, exc: ProjectError) -> JSONResponse:

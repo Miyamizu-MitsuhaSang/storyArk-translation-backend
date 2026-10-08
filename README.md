@@ -1,6 +1,6 @@
 # StoryArk Translation Backend
 
-StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 RAG SDK 的稀疏向量检索接口。当前 RAG 索引保存在进程内存中，进程重启后需要重新构建。
+StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 RAG SDK 的稀疏向量检索接口。当前 RAG 索引保存在进程内存中，进程重启后需要重新构建；CAT 工作台和审核工作流已接入项目路由，外部 LLM/provider 调用暂未启用。
 
 ## 当前接口
 
@@ -18,6 +18,15 @@ StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 R
 | `POST` | `/api/v1/projects/{project_id}/tm/search` | exact/fuzzy TM 检索 |
 | `POST` | `/api/v1/projects/{project_id}/translation-memories/reindex` | 提交 TM 索引重建任务 |
 | `GET` | `/api/v1/jobs/{job_id}` | 查询 TM 索引任务状态 |
+| `GET/PATCH` | `/api/v1/projects/{project_id}/segments/{segment_id}` | CAT 片段详情与草稿保存 |
+| `POST/DELETE` | `/api/v1/projects/{project_id}/segments/{segment_id}/lock` | CAT 片段锁定、释放和续租 |
+| `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/suggestions` | TM、术语库和世界观建议 |
+| `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/qa` | CAT 片段 QA 检查 |
+| `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/submit-review` | 提交审核 |
+| `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/approve` | 审核通过 |
+| `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/reject` | 审核退回 |
+| `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/confirm` | 确认并写入 TM |
+| `POST` | `/api/v1/projects/{project_id}/segments/bulk-action` | 批量工作流动作 |
 
 完整 API 契约见 [`docs/api.md`](docs/api.md)。翻译记忆当前提供用户库 CRUD、项目有效范围、精确/fuzzy 检索、异步重建和任务状态查询；运行时路由以 `/docs` 和 `/openapi.json` 为准。
 
@@ -71,7 +80,7 @@ Celery Beat 每小时运行历史产物清理：
 - [`uv`](https://docs.astral.sh/uv/)
 - PostgreSQL
 - Git 和可用的 C++17 编译器，用于构建独立的 RAG SDK
-- Redis 可选；`REDIS_LAUNCH` 默认为 `false`
+- Redis 可选；`.env.app` 中的 `REDIS_ENABLED` 默认为 `false`
 
 `translate-manager-rag` 位于仓库内的 `packages/translate-manager-rag/`，通过本地 editable 依赖安装。它只负责非负稀疏向量的倒排索引和 Top-K MIPS 检索；threshold 属于索引配置，不需要每次搜索重复传入，`top_k` 属于查询参数且默认值为 5。
 
@@ -87,8 +96,15 @@ API_PREFIX=/api/v1
 LOG_LEVEL=INFO
 CELERY_BROKER_URL=redis://127.0.0.1:6379/0
 CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1
+# Redis 总开关与连接地址；具体功能还需打开对应功能开关
+REDIS_ENABLED=false
+REDIS_URL=redis://127.0.0.1:6379/2
 TM_CACHE_ENABLED=false
 TM_CACHE_NAMESPACE=tm
+# Redis 短时防止同一 Idempotency-Key 并发执行；数据库仍是幂等事实来源
+IDEMPOTENCY_REDIS_ENABLED=false
+IDEMPOTENCY_LOCK_TTL_SECONDS=300
+IDEMPOTENCY_REDIS_NAMESPACE=idempotency
 TM_SEARCH_MAX_TEXT_LENGTH=4096
 TM_SEARCH_MAX_PAGE_SIZE=50
 # false 时 reindex API 返回 503；true 时启用 Celery TM 索引任务投递
@@ -105,7 +121,17 @@ TM_SEMANTIC_MODEL_JA_ENABLED=false
 TM_SEMANTIC_MODEL_ZH_PATH=models/semantic/bge-small-zh-v1.5
 TM_SEMANTIC_MODEL_EN_PATH=models/semantic/bge-small-en-v1.5
 TM_SEMANTIC_MODEL_JA_PATH=models/semantic/ruri-base
+# 文档源文件本地存储目录、单文件大小上限和删除宽限期
+DOCUMENT_STORAGE_DIR=var/documents
+DOCUMENT_MAX_FILE_BYTES=52428800
+DOCUMENT_PURGE_GRACE_SECONDS=86400
+# true 时由 Celery worker 自动领取导入、解析、导出和清理任务
+DOCUMENT_TASKS_ENABLED=false
+# true 时由 Celery worker 执行超过 100 条的 CAT 批量工作流任务
+CAT_TASKS_ENABLED=false
 ```
+
+启用 `DOCUMENT_TASKS_ENABLED=true` 后，Celery worker 处理文档导入、解析、导出任务；Celery Beat 每小时运行 `documents.cleanup_due`，只清理已超过 `DOCUMENT_PURGE_GRACE_SECONDS` 且没有活动任务引用的软删除文档。清理失败会保留数据库记录和存储标识，并依靠 `BackgroundJob` 的有限重试机制处理，不会直接删除文档事实记录。
 
 后端也兼容已有环境文件中的 `CANDIDATE_THRESHOLD`；两个变量同时存在时优先使用 `RAG_CANDIDATE_THRESHOLD`。
 
@@ -139,7 +165,6 @@ DB_PASSWORD=change-me
 DB_HOST=127.0.0.1
 DB_PORT=5432
 DB_NAME=translation_platform
-REDIS_LAUNCH=false
 ```
 
 `src/translation_backend/env/.env.security`：
@@ -158,7 +183,7 @@ AUTH_API_KEY_ENCRYPTION_KEY_VERSION=v1
 uv run aerich upgrade
 ```
 
-Redis 和 Celery 是可选的。启用 `REDIS_LAUNCH=true` 后，应用连接 `127.0.0.1:6379`；设置 `TM_CACHE_ENABLED=true` 才会使用 Redis TM 检索缓存，Redis 不可用时自动降级为无缓存查询。`TM_INDEX_STORAGE_DIR` 保存本地内容寻址索引产物，`TM_INDEX_RETENTION_COUNT` 控制历史产物保留数量；清理任务不会删除活动、构建中或仍被任务引用的产物。需要异步导入或重建索引时，另起 Celery worker，并确保 `CELERY_BROKER_URL` 和 `CELERY_RESULT_BACKEND` 可访问：
+Redis 和 Celery 是可选的。Redis 的总开关和连接地址统一配置在 `.env.app`：只有 `REDIS_ENABLED=true` 且对应功能开关（例如 `TM_CACHE_ENABLED` 或 `IDEMPOTENCY_REDIS_ENABLED`）开启时，应用才会建立 Redis 客户端连接。Redis 不可用时，TM 查询和幂等流程分别降级到无缓存查询和 PostgreSQL 唯一约束；Redis 不作为事实来源。`TM_INDEX_STORAGE_DIR` 保存本地内容寻址索引产物，`TM_INDEX_RETENTION_COUNT` 控制历史产物保留数量；清理任务不会删除活动、构建中或仍被任务引用的产物。需要异步导入或重建索引时，另起 Celery worker，并确保 `CELERY_BROKER_URL` 和 `CELERY_RESULT_BACKEND` 可访问：
 
 ```bash
 uv run celery -A app.tasks.celery_app:celery_app worker --loglevel=INFO

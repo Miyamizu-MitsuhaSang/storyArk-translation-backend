@@ -30,8 +30,10 @@ CREATE TABLE IF NOT EXISTS documents (
     import_errors JSONB NOT NULL DEFAULT '[]'::jsonb,
     last_parse_job_id UUID NULL,
     parsed_at TIMESTAMPTZ NULL,
+    archived_at TIMESTAMPTZ NULL,
     deleted_at TIMESTAMPTZ NULL,
     purge_after TIMESTAMPTZ NULL,
+    purged_at TIMESTAMPTZ NULL,
     CONSTRAINT ck_documents_file_size_nonnegative CHECK (file_size >= 0),
     CONSTRAINT ck_documents_counts_nonnegative CHECK (
         segment_count >= 0 AND translated_segment_count >= 0 AND error_count >= 0
@@ -97,6 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_segment_locks_locked_until
     ON segment_locks (locked_until);
 CREATE INDEX IF NOT EXISTS idx_segment_locks_user_until
     ON segment_locks (user_id, locked_until);
+
 """
 
 

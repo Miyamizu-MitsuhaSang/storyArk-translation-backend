@@ -21,6 +21,7 @@ from ....models import (
 )
 from ....repositories import MembershipRepository, ProjectRepository, TerminologyRepository
 from ..service import ProjectError, ProjectForbiddenError, ProjectNotFoundError
+from ..audit import ProjectAuditService
 from .schemas import (
     TerminologyBaseCreateRequest,
     TerminologyBasePage,
@@ -90,6 +91,10 @@ class TerminologyService:
             base = await self._repository.create_base(project, **request.model_dump())
         except IntegrityError as exc:
             raise TerminologyConflictError("同一项目中术语库名称不能重复") from exc
+        await ProjectAuditService.record(
+            project_id, actor_user_id=user.id, resource_type="terminology_base", resource_id=base.id,
+            action="terminology_base.created",
+        )
         return await self._base_response(base)
 
     async def list_terms(
@@ -142,6 +147,10 @@ class TerminologyService:
             created_by_id=user.id,
         )
         await self._record_revision(term, user, None)
+        await ProjectAuditService.record(
+            project_id, actor_user_id=user.id, resource_type="terminology_term", resource_id=term.id,
+            action="terminology_term.created",
+        )
         return await self._term_response(term)
 
     async def get_term(self, user: User, project_id: UUID, base_id: UUID, term_id: UUID) -> TerminologyTermResponse:
@@ -170,6 +179,10 @@ class TerminologyService:
         term.version += 1
         await self._repository.save_term(term, update_fields=[*changes.keys(), "version"])
         await self._record_revision(term, user, request.change_note)
+        await ProjectAuditService.record(
+            project_id, actor_user_id=user.id, resource_type="terminology_term", resource_id=term.id,
+            action="terminology_term.updated",
+        )
         return await self._term_response(term)
 
     async def delete_term(self, user: User, project_id: UUID, base_id: UUID, term_id: UUID) -> None:
@@ -180,6 +193,10 @@ class TerminologyService:
             term.version += 1
             await self._repository.save_term(term, update_fields=["deleted_at", "status", "version"])
             await self._record_revision(term, user, "软删除术语")
+            await ProjectAuditService.record(
+                project_id, actor_user_id=user.id, resource_type="terminology_term", resource_id=term.id,
+                action="terminology_term.deleted",
+            )
 
     async def search(
         self,

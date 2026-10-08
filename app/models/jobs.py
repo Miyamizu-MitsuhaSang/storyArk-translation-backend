@@ -157,3 +157,29 @@ class BackgroundJob(TimestampedModel):
                     "finished_at", "available_at",
                 ],
             )
+
+    async def cancel(
+        self,
+        *,
+        reason: str = "用户请求取消任务",
+        now: datetime | None = None,
+    ) -> None:
+        """Atomically cancel an active job and release any worker lease."""
+        now = now or datetime.now(timezone.utc)
+        async with transactions.in_transaction() as connection:
+            current = await type(self).filter(id=self.id).using_db(connection).select_for_update().first()
+            if current is None or current.status not in {"queued", "running"}:
+                raise ValueError("job is not cancellable")
+            current.status = "cancelled"
+            current.finished_at = now
+            current.worker_id = None
+            current.lease_expires_at = None
+            current.error_code = "JOB_CANCELLED"
+            current.error_message = _safe_error_message(reason)
+            await current.save(
+                using_db=connection,
+                update_fields=[
+                    "status", "finished_at", "worker_id", "lease_expires_at",
+                    "error_code", "error_message",
+                ],
+            )

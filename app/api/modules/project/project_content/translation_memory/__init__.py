@@ -1,1 +1,0 @@
-"""Project translation memory API."""

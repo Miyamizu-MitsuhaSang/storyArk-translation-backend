@@ -10,8 +10,9 @@ try:
     from .app.api.modules.health import health
     from .app.api.modules.project.routes import register_project_exception_handler
     from .app.api.modules.project.api_key.routes import register_project_api_key_exception_handler
+    from .app.api.modules.project.document.routes import register_document_exception_handler
     from .app.api.router import api_router
-    from .app.core.config import app_settings, database_settings
+    from .app.core.config import app_settings
     from .app.core.database import TORTOISE_ORM
     from .app.core.logging import configure_logging, install_request_logging
 except ImportError:
@@ -20,8 +21,9 @@ except ImportError:
     from app.api.modules.health import health
     from app.api.modules.project.routes import register_project_exception_handler
     from app.api.modules.project.api_key.routes import register_project_api_key_exception_handler
+    from app.api.modules.project.document.routes import register_document_exception_handler
     from app.api.router import api_router
-    from app.core.config import app_settings, database_settings
+    from app.core.config import app_settings
     from app.core.database import TORTOISE_ORM
     from app.core.logging import configure_logging, install_request_logging
 from tortoise import Tortoise
@@ -30,7 +32,10 @@ from tortoise import Tortoise
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await Tortoise.init(config=TORTOISE_ORM)
-    if database_settings.redis_launch is True:
+    if (
+        app_settings.redis_enabled
+        and (app_settings.tm_cache_enabled or app_settings.idempotency_redis_enabled)
+    ):
         try:
             from .app.core.redis import close_redis, init_redis
         except ImportError:
@@ -73,6 +78,7 @@ register_api_key_exception_handler(app)
 # 注册项目模块异常处理器，将 ProjectError 转换为统一的项目错误响应。
 register_project_exception_handler(app)
 register_project_api_key_exception_handler(app)
+register_document_exception_handler(app)
 
 if __name__ == '__main__':
     uvicorn.run(app, host="127.0.0.1", port=8000, workers=2, reload=True)

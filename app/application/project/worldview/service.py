@@ -10,6 +10,7 @@ from ....domain.shared.errors import DomainError
 from ....models import Project, ProjectMember, User, Worldview, WorldviewEntry
 from ....repositories import MembershipRepository, ProjectRepository, WorldviewRepository
 from ..service import ProjectError, ProjectForbiddenError, ProjectNotFoundError
+from ..audit import ProjectAuditService
 from .schemas import (
     WorldviewEntryCreateRequest,
     WorldviewEntryPage,
@@ -77,6 +78,10 @@ class WorldviewService:
                 if hasattr(worldview, field) and value is not None:
                     setattr(worldview, field, value)
             await self._repository.save(worldview, update_fields=[key for key in changes if hasattr(worldview, key)])
+            await ProjectAuditService.record(
+                project_id, actor_user_id=user.id, resource_type="worldview", resource_id=worldview.id,
+                action="worldview.created",
+            )
             return self._worldview_response(worldview)
         if changes:
             for field, value in changes.items():
@@ -84,6 +89,10 @@ class WorldviewService:
                     setattr(worldview, field, value)
             worldview.version += 1
             await self._repository.save(worldview, update_fields=[*changes.keys(), "version"])
+            await ProjectAuditService.record(
+                project_id, actor_user_id=user.id, resource_type="worldview", resource_id=worldview.id,
+                action="worldview.updated",
+            )
         return self._worldview_response(worldview)
 
     async def list_entries(
@@ -141,6 +150,10 @@ class WorldviewService:
             status=request.status,
         )
         await self._record_revision(entry, user, None)
+        await ProjectAuditService.record(
+            project_id, actor_user_id=user.id, resource_type="worldview_entry", resource_id=entry.id,
+            action="worldview_entry.created",
+        )
         return await self._entry_response(entry)
 
     async def get_entry(self, user: User, project_id: UUID, entry_id: UUID) -> WorldviewEntryResponse:
@@ -165,6 +178,10 @@ class WorldviewService:
         entry.version += 1
         await self._repository.save_entry(entry, update_fields=["entry_type" if field == "type" else field for field in changes] + ["version"])
         await self._record_revision(entry, user, request.change_note)
+        await ProjectAuditService.record(
+            project_id, actor_user_id=user.id, resource_type="worldview_entry", resource_id=entry.id,
+            action="worldview_entry.updated",
+        )
         return await self._entry_response(entry)
 
     async def delete_entry(self, user: User, project_id: UUID, entry_id: UUID) -> None:
@@ -177,6 +194,10 @@ class WorldviewService:
             entry.version += 1
             await self._repository.save_entry(entry, update_fields=["deleted_at", "status", "version"])
             await self._record_revision(entry, user, "软删除世界观条目")
+            await ProjectAuditService.record(
+                project_id, actor_user_id=user.id, resource_type="worldview_entry", resource_id=entry.id,
+                action="worldview_entry.deleted",
+            )
 
     async def _authorized_project(self, user: User, project_id: UUID) -> tuple[Project, ProjectMember]:
         membership = await self._projects.find_membership(project_id, user.id, with_project=True)

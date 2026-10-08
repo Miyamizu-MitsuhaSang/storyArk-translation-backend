@@ -2,7 +2,7 @@
 
 通用 CAT/AI 翻译平台 API 设计草案。本文档描述第一版业务 API 契约，作为 FastAPI 路由、Pydantic Schema 和前端 API client 的共同依据。
 
-当前仓库已实现认证、项目基础能力、健康检查、RAG 验证接口和翻译记忆（TM）核心查询；文档、segment、术语、审核和导出等部分仍按契约逐步接入。运行时是否可用以 `/openapi.json` 和集成测试为准。
+当前仓库已实现认证、项目基础能力、健康检查、RAG 验证接口、翻译记忆（TM）核心查询、document 导入/解析/导出任务以及 CAT 工作台和审核工作流接口。CAT 的外部 RAG/LLM provider 调用暂未接入；运行时是否可用以 `/openapi.json` 和集成测试为准。
 
 ## 文档源与同步
 
@@ -532,7 +532,7 @@ TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平�
 
 `GET /projects/{project_id}/translation-memories` 返回当前用户在该项目可使用的 `platform` 库和自己的 `user` 库，并返回语言对、优先级、`content_version`、条目数和 `index_status`。项目成员关系是唯一有效范围来源，不能通过请求参数读取其他项目或其他用户的库。
 
-`POST /projects/{project_id}/tm/search` 支持数据库精确检索和已发布稀疏索引的模糊检索：
+`POST /projects/{project_id}/tm/search` 当前支持精确检索：
 
 ```json
 {
@@ -546,7 +546,7 @@ TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平�
 }
 ```
 
-响应包含 `source_hash`、`index_status`、条目来源和 `score`。`match_mode` 可为 `exact` 或 `fuzzy`。`fuzzy` 仅在对应库存在兼容且校验通过的活动产物时可用；服务端先应用项目有效范围和完整语言对分区，再执行 SDK Top-K 召回并映射回仍处于 active 的 TM 条目。查询文本超过服务端上限返回 `422`，产物缺失、过期或损坏返回 `503 INDEX_NOT_AVAILABLE`。真正的 dense semantic 模式不在当前契约内。
+响应包含 `source_hash`、`index_status`、条目来源和 `score`。`match_mode` 预留 `fuzzy`、`semantic` 扩展；接入向量索引后仍必须先应用项目有效范围和语言对过滤，再执行模糊或语义召回。查询文本超过服务端上限返回 `422`，索引不可用返回 `503 INDEX_NOT_AVAILABLE`。
 
 ### 7.3 confirmed segment 自动写入
 
@@ -556,11 +556,13 @@ segment 从 `approved` 转为 `confirmed` 时，工作流必须以 `origin=confi
 
 批量导入使用 `Idempotency-Key`，服务端先校验每一行并保留原始 `row`、错误 `code` 和 `message`。小于同步阈值的请求可返回 `200` `{imported,skipped,invalid_rows}`；超过阈值或需要后台 worker 时返回 `202` `{job_id,status:"queued"}`，通过 `/jobs/{job_id}` 查询最终结果。相同 key 的重试不得重复写入；已归档库返回 `409`。
 
-`POST /projects/{project_id}/translation-memories/reindex` 为异步操作，成功返回 `202` 和一个或多个任务引用；每个引用包含 `job_id`、`status`、提交时捕获的 `requested_version` 和 `type: "tm_index_rebuild"`。队列或索引后端暂不可用返回 `503 INDEX_NOT_AVAILABLE`，调用方应按 `Retry-After` 或指数退避重试，不能把 `503` 当作已提交。重建任务按 `content_version` 消费，旧版本完成后不得覆盖更新版本索引。
+`POST /projects/{project_id}/translation-memories/reindex` 为异步操作，成功返回 `202` 和一个或多个 `job_id`。队列或索引后端暂不可用返回 `503 INDEX_NOT_AVAILABLE`，调用方应按 `Retry-After` 或指数退避重试，不能把 `503` 当作已提交。重建任务按 `content_version` 消费，旧版本完成后不得覆盖更新版本索引。
 
 ### 7.5 Redis 可选缓存和大数据量演进
 
 Redis 只用于可选的检索结果缓存，不改变权限判断和数据库事实来源。缓存 key 必须包含用户、项目、规范化查询、过滤条件及每个库的 `content_version`；Redis 不可用时自动降级为无缓存查询，不能导致接口失败。生产部署可设置 `TM_CACHE_ENABLED=true`、`TM_CACHE_TTL_SECONDS` 和 `TM_CACHE_NAMESPACE`，并监控命中率、查询耗时和缓存异常。
+
+Redis 的基础配置统一放在 `.env.app`：`REDIS_ENABLED` 是总开关，`REDIS_URL` 是连接地址；只有总开关与具体功能开关同时开启时，应用才初始化 Redis 客户端。`.env.db` 仅保存关系数据库连接参数，不再配置 Redis。Celery 的 `CELERY_BROKER_URL` 和 `CELERY_RESULT_BACKEND` 也继续由 `.env.app` 管理。
 
 数据量增长时按以下顺序演进：先使用数据库精确索引和 `cursor` 分页，随后为规范化原文哈希增加唯一索引；再将模糊/语义索引和批量重建移至 Celery worker，最后按租户或语言对分片。所有阶段都保留 `content_version`、幂等键和可重放导入记录，避免全量重建阻塞在线检索。
 
@@ -595,6 +597,52 @@ tm_ids[]: optional
 
 返回文档状态、segment 统计、语言对、版本和导入错误。
 
+### POST `/projects/{project_id}/documents/{document_id}/archive`
+
+归档文档。仅项目 `owner` 或 `manager` 可执行。归档不会删除文件、segment、TM 来源或审计记录；文档归档后不能重新解析、修改或创建新的导出任务，若需要继续编辑必须先由项目管理员恢复（恢复接口后续补充）。
+
+请求体为空，支持 `Idempotency-Key`。成功返回 `200`：
+
+```json
+{
+  "document": {
+    "id": "doc-123",
+    "status": "archived",
+    "archived_at": "2026-09-25T08:00:00Z"
+  }
+}
+```
+
+文档已经是 `archived` 时重复请求返回当前记录，不重复创建任务。文档处于 `parsing` 或 `exporting` 等不可中断状态时返回 `409 DOCUMENT_BUSY`；不存在或当前用户不可见时统一返回 `404`。
+
+### DELETE `/projects/{project_id}/documents/{document_id}`
+
+软删除文档并异步安排文件清理。仅项目 `owner` 或 `manager` 可执行。接口不会立即删除数据库记录或审计记录，而是设置 `deleted_at`，将文档标记为 `deletion_pending`，并创建延迟清理任务。宽限期结束后，worker 再删除本地文件或对象存储中的文件，最后写入 `purged_at` 和清理结果。
+
+请求头：
+
+```http
+Idempotency-Key: <uuid-for-retryable-write>
+```
+
+成功返回 `202 Accepted`：
+
+```json
+{
+  "document": {
+    "id": "doc-123",
+    "status": "deletion_pending",
+    "deleted_at": "2026-09-25T08:00:00Z",
+    "purge_after": "2026-09-26T08:00:00Z"
+  },
+  "job_id": "job-document-purge-123"
+}
+```
+
+重复提交相同 `Idempotency-Key` 返回首次请求的结果；已处于 `deletion_pending` 或 `purged` 的文档重复删除也保持幂等。文档正在解析、导出、被活动任务引用或存在法律保留时返回 `409 DOCUMENT_BUSY`，不得绕过任务引用直接删除文件。文档不存在或当前用户不可见时统一返回 `404`。
+
+清理 worker 必须在删除文件前再次确认：文档没有活动任务、没有新的恢复或替换版本、对象存储键仍与数据库记录匹配，并记录脱敏的失败原因。清理失败时保留数据库记录和 `storage_key`，任务按有限次数重试，不得把失败误报为已清理。
+
 ### POST `/projects/{project_id}/documents/{document_id}/parse`
 
 重新解析文档，返回异步 `job_id`。如果已有翻译内容，必须要求显式 `preserve_translations` 选项。
@@ -621,6 +669,8 @@ page_size, cursor, sort
 返回 `202` 和 `job_id`。通过任务接口查询完成状态，完成后返回临时下载 URL。
 
 ## 9. CAT translation workbench API
+
+本节接口已由 `app/api/modules/project/cat/workbench` 实现。片段锁、乐观版本、QA 结果和建议快照均由 application service 统一处理；本版本的建议只调用已有 TM、术语库和世界观业务，不发起外部 AI provider 请求。
 
 ### GET `/projects/{project_id}/segments/{segment_id}`
 
@@ -742,6 +792,10 @@ Response `200`：
 
 ## 10. Translation workflow actions
 
+本节接口已由 `app/api/modules/project/cat/workflow` 实现。审核、退回、确认和撤销确认均校验项目成员角色、segment version 和允许的状态转换；confirm 会幂等写入当前用户 TM 并保留来源关联。
+
+批量动作最多同步处理 100 个 segment；超过 100 个时创建 `cat_bulk_action` 后台任务并返回 `202`。启用实际 Celery 派发需要设置 `CAT_TASKS_ENABLED=true`。
+
 ### POST `/projects/{project_id}/segments/{segment_id}/submit-review`
 
 将当前译文从 `translated` 或 `draft` 提交到 `in_review`。要求：持有锁、译文非空、必需 QA 错误已处理或明确豁免。
@@ -793,21 +847,19 @@ Response `200`：
 
 ### GET `/jobs/{job_id}`
 
-当前已接入翻译记忆索引任务；其他异步任务沿用相同资源边界。索引任务返回以下脱敏字段：
+所有异步导入、解析、导出、索引和批量操作统一通过任务接口查询：
 
 ```json
 {
-  "job_id": "job-index-123",
-  "type": "tm_index_rebuild",
+  "id": "job-import-123",
+  "type": "document_import",
   "status": "running",
-  "requested_version": 4,
-  "attempts": 1,
-  "max_attempts": 3,
+  "progress": 0.65,
+  "message": "正在解析第 650/1000 个 segment",
   "result": null,
-  "error_code": null,
-  "error_message": null,
+  "error": null,
   "created_at": "2026-09-20T12:00:00Z",
-  "updated_at": "2026-09-20T12:00:00Z"
+  "finished_at": null
 }
 ```
 
@@ -816,6 +868,8 @@ Response `200`：
 ### POST `/jobs/{job_id}/cancel`
 
 取消仍处于 `queued` 或 `running` 的可取消任务。
+
+成功返回统一任务对象，包含 `id`、`type`、`status`、`progress`、`message`、脱敏的 `result`、`error`、`created_at` 和 `finished_at`。任务取消后状态为 `cancelled`，worker 租约会被释放；已完成、失败或已取消的任务返回 `409`，任务不存在或当前用户无权访问时返回 `404`。
 
 ### GET `/projects/{project_id}/audit-events`
 

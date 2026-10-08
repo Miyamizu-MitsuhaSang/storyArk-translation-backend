@@ -5,7 +5,7 @@ import pytest
 from tortoise import Tortoise
 from tortoise.exceptions import IntegrityError
 
-from translation_backend.models import (
+from translation_backend.app.models import (
     Document,
     DocumentSegment,
     Project,
@@ -19,7 +19,7 @@ def run_db_test(coro):
     async def scenario():
         await Tortoise.init(
             db_url="sqlite://:memory:",
-            modules={"models": ["translation_backend.models"]},
+            modules={"models": ["translation_backend.app.models"]},
         )
         await Tortoise.generate_schemas()
         try:

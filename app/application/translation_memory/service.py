@@ -362,6 +362,16 @@ class TranslationMemoryService:
                 library.content_version += 1
                 await library.save(update_fields=["content_version"])
                 await self._invalidate_library_version(library.id, previous_version)
+            elif entry.status != "active":
+                entry.status = "active"
+                entry.deleted_at = None
+                entry.revision += 1
+                await entry.save(update_fields=["status", "deleted_at", "revision", "updated_at"])
+                await self._record_revision(entry, user, "重新确认片段恢复翻译记忆")
+                previous_version = library.content_version
+                library.content_version += 1
+                await library.save(update_fields=["content_version"])
+                await self._invalidate_library_version(library.id, previous_version)
             source = await TranslationMemoryEntrySource.filter(
                 entry_id=entry.id,
                 user_id=user.id,
@@ -377,10 +387,44 @@ class TranslationMemoryService:
                     document_id=document_id,
                     segment_id=segment_id,
                 )
+            elif source.invalidated_at is not None:
+                source.invalidated_at = None
+                await source.save(update_fields=["invalidated_at", "updated_at"])
             else:
                 # save() refreshes updated_at, providing last_seen_at semantics.
                 await source.save()
         return entry
+
+    async def invalidate_confirmed_segment(self, user: User, segment_id: UUID) -> None:
+        """Invalidate confirmed-segment provenance without erasing TM history."""
+        sources = await TranslationMemoryEntrySource.filter(
+            segment_id=segment_id,
+            user_id=user.id,
+            invalidated_at=None,
+        )
+        affected_libraries: set[UUID] = set()
+        for source in sources:
+            source.invalidated_at = datetime.now(timezone.utc)
+            await source.save(update_fields=["invalidated_at", "updated_at"])
+            entry = await TranslationMemoryEntry.get_or_none(id=source.entry_id)
+            if entry is None or entry.status != "active":
+                continue
+            if await TranslationMemoryEntrySource.filter(entry_id=entry.id, invalidated_at=None).exists():
+                continue
+            entry.status = "deprecated"
+            entry.revision += 1
+            await entry.save(update_fields=["status", "revision", "updated_at"])
+            await self._record_revision(entry, user, "撤销确认后将翻译记忆标记为过期")
+            affected_libraries.add(entry.library_id)
+
+        for library_id in affected_libraries:
+            library = await TranslationMemoryLibrary.get_or_none(id=library_id)
+            if library is None:
+                continue
+            previous_version = library.content_version
+            library.content_version += 1
+            await library.save(update_fields=["content_version"])
+            await self._invalidate_library_version(library.id, previous_version)
 
     async def import_entries(
         self,

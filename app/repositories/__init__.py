@@ -4,6 +4,8 @@ from .project import ProjectRepository
 from .terminology import TerminologyRepository
 from .usage import AIUsageRepository
 from .worldview import WorldviewRepository
+from .document import DocumentRepository
+from .cat import CatRepository
 
 __all__ = [
     "ApiKeyRepository",
@@ -15,4 +17,6 @@ __all__ = [
     "TerminologyRepository",
     "UserRepository",
     "WorldviewRepository",
+    "DocumentRepository",
+    "CatRepository",
 ]

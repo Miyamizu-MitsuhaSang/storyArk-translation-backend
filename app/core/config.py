@@ -14,6 +14,9 @@ class AppSettings(BaseSettings):
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
     log_file_path: Path | None = None
+    # Redis 总开关和连接地址统一由应用配置管理；具体功能仍由各自开关控制。
+    redis_enabled: bool = False
+    redis_url: str = "redis://127.0.0.1:6379/2"
     tm_cache_enabled: bool = False
     tm_cache_ttl_seconds: int = 60
     tm_cache_namespace: str = "tm"
@@ -23,6 +26,16 @@ class AppSettings(BaseSettings):
     tm_index_retention_count: int = Field(default=3, ge=1)
     tm_search_max_text_length: int = 4096
     tm_search_max_page_size: int = 50
+    document_storage_dir: Path = BASE_DIR / "var" / "documents"
+    document_max_file_bytes: int = Field(default=52_428_800, gt=0)
+    document_purge_grace_seconds: int = Field(default=86_400, ge=0)
+    document_tasks_enabled: bool = False
+    # Redis 幂等锁开关；关闭或 Redis 不可用时回退到数据库唯一约束。
+    idempotency_redis_enabled: bool = False
+    # 幂等处理中锁租约，必须覆盖最长预期请求时间并允许过期恢复。
+    idempotency_lock_ttl_seconds: int = Field(default=300, ge=1, le=3600)
+    idempotency_redis_namespace: str = "idempotency"
+    cat_tasks_enabled: bool = False
     tm_semantic_model_zh_enabled: bool = False
     tm_semantic_model_en_enabled: bool = False
     tm_semantic_model_ja_enabled: bool = False
@@ -64,9 +77,6 @@ class SecuritySettings(BaseSettings):
 
 
 class DatabaseSettings(BaseSettings):
-    redis_launch: bool = False
-    redis_url: str = "redis://127.0.0.1:6379/2"
-
     db_user: str = "postgres"
     db_password: str = "postgres"
     db_host: str = "127.0.0.1"
