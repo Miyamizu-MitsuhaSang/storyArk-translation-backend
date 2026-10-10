@@ -17,7 +17,7 @@ DOCUMENT_STATUSES = (
     "deletion_pending",
     "purged",
 )
-DOCUMENT_FORMATS = ("xliff", "csv", "json", "po", "txt", "unknown")
+DOCUMENT_FORMATS = ("xliff", "csv", "xlsx", "json", "po", "txt", "unknown")
 DOCUMENT_SEGMENT_STATUSES = (
     "untranslated",
     "translated",
@@ -38,6 +38,14 @@ class Document(TimestampedModel):
         related_name="documents",
         on_delete=fields.CASCADE,
         description="文档所属项目；项目删除时一并删除文档及其片段。",
+    )
+    project_version = fields.ForeignKeyField(
+        "models.ProjectVersion",
+        related_name="documents",
+        null=True,
+        source_field="version_id",
+        on_delete=fields.SET_NULL,
+        description="可选的项目业务版本；为空表示历史文档未归属版本。",
     )
     created_by = fields.ForeignKeyField(
         "models.User",

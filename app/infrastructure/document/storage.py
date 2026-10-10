@@ -46,6 +46,9 @@ class LocalDocumentStorage:
         except OSError as exc:
             raise DocumentStorageError("文档文件读取失败") from exc
 
+    def path_for(self, *, storage_key: str) -> Path:
+        return self._path_for(storage_key)
+
     def _path_for(self, storage_key: str) -> Path:
         if not storage_key or "\\" in storage_key:
             raise DocumentStorageError("无效的文档存储标识")

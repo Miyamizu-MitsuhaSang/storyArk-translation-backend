@@ -35,6 +35,11 @@ class ApiKeyInUseError(ApiKeyError):
     code = "API_KEY_IN_USE"
 
 
+class ApiKeyInsecureTransportError(ApiKeyError):
+    status_code = 400
+    code = "API_KEY_HTTPS_REQUIRED"
+
+
 class ApiKeyService:
     def __init__(self, *, encryption_key: bytes | None = None, key_version: str | None = None, repository: ApiKeyRepository | None = None) -> None:
         self._encryption_key = encryption_key or self._load_key_from_settings()
@@ -79,6 +84,8 @@ class ApiKeyService:
     async def update(self, user: User, key_id: UUID, request: UpdateApiKeyRequest) -> ApiKeyResponse:
         credential = await self._owned(user, key_id)
         changes = request.model_dump(exclude_unset=True)
+        if changes.get("status") == "inactive" and await self._repository.has_active_translation_tasks(credential.id):
+            raise ApiKeyInUseError("API key 仍被活动翻译任务引用，任务结束后才能停用")
         if "label" in changes and changes["label"]:
             changes["label"] = changes["label"].strip()
         update_fields: list[str] = []
@@ -92,7 +99,10 @@ class ApiKeyService:
 
     async def delete(self, user: User, key_id: UUID) -> None:
         credential = await self._owned(user, key_id)
-        # Project key bindings will supply this check when their model is added.
+        if await self._repository.has_project_bindings(credential.id):
+            raise ApiKeyInUseError("API key 仍绑定到项目，解除项目绑定后才能删除")
+        if await self._repository.has_active_translation_tasks(credential.id):
+            raise ApiKeyInUseError("API key 仍被活动翻译任务引用，任务结束后才能删除")
         await self._repository.delete(credential)
 
     async def decrypt(self, credential: AIProviderCredential) -> str:

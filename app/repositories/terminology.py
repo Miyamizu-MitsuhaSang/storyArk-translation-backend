@@ -33,12 +33,40 @@ class TerminologyRepository:
             query = query.filter(deleted_at=None)
         return await query.first()
 
+    async def find_term_by_source(
+        self,
+        base_id: UUID | str,
+        source_term: str,
+        *,
+        include_deleted: bool = False,
+    ) -> TerminologyTerm | None:
+        query = TerminologyTerm.filter(base_id=base_id, source_term__iexact=source_term)
+        if not include_deleted:
+            query = query.filter(deleted_at=None)
+        return await query.order_by("-updated_at").first()
+
+    async def list_terms_by_ids(
+        self,
+        base_id: UUID | str,
+        term_ids: list[UUID | str],
+        *,
+        include_deleted: bool = False,
+    ) -> list[TerminologyTerm]:
+        query = TerminologyTerm.filter(base_id=base_id, id__in=term_ids)
+        if not include_deleted:
+            query = query.filter(deleted_at=None)
+        return await query.order_by("id")
+
     async def count_terms(self, base: TerminologyBase) -> int:
         return await TerminologyTerm.filter(base=base, deleted_at=None).count()
 
     async def save_term(self, term: TerminologyTerm, *, update_fields: list[str]) -> TerminologyTerm:
         await term.save(update_fields=list(dict.fromkeys([*update_fields, "updated_at"])))
         return term
+
+    async def save_base(self, base: TerminologyBase, *, update_fields: list[str]) -> TerminologyBase:
+        await base.save(update_fields=list(dict.fromkeys([*update_fields, "updated_at"])))
+        return base
 
     async def list_revisions(self, term: TerminologyTerm) -> list[TerminologyTermRevision]:
         return await TerminologyTermRevision.filter(term=term).order_by("-version")

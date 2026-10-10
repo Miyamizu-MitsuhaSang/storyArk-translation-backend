@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import JSONResponse
+from starlette.datastructures import UploadFile
 from starlette.responses import Response
 
 from ......application.project.terminology.schemas import (
@@ -16,11 +18,21 @@ from ......application.project.terminology.schemas import (
     TerminologyTermQuery,
     TerminologyTermResponse,
     TerminologyTermUpdateRequest,
+    BulkActionRequest,
+    BulkActionResponse,
+    ClearResult,
+    ClearRequest,
+    ExportRequest,
+    ExtractRequest,
+    ImportResult,
+    JobAccepted,
+    MineRequest,
 )
 from ......application.project.terminology.service import TerminologyService
+from ......application.project.terminology.workflows import TerminologyWorkflowService
 from ......models import User
 from .....shared.dependencies import get_current_user
-from .dependencies import get_terminology_service
+from .dependencies import get_terminology_service, get_terminology_workflow_service
 
 
 project_terminology_router = APIRouter()
@@ -146,3 +158,141 @@ async def search_terminology(
     service: TerminologyService = Depends(get_terminology_service),
 ) -> TerminologySearchResponse:
     return await service.search(user, project_id, request)
+
+
+@project_terminology_router.post(
+    "/terminology-bases/{base_id}/terms/import",
+    response_model=ImportResult,
+    description="导入 CSV 或 JSON 术语；保留行号错误并支持 update、skip、error 冲突策略。",
+)
+async def import_terminology_terms(
+    project_id: UUID,
+    base_id: UUID,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    user: User = Depends(get_current_user),
+    service: TerminologyWorkflowService = Depends(get_terminology_workflow_service),
+) -> ImportResult:
+    # JSON and multipart are accepted on the same contract path. Header is read
+    # explicitly so clients cannot accidentally put an idempotency key in data.
+    idempotency_key = request.headers.get("Idempotency-Key") or idempotency_key
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/"):
+        form = await request.form()
+        upload = form.get("file")
+        if not isinstance(upload, UploadFile):
+            raise ValueError("multipart 请求必须包含 file")
+        payload = await upload.read()
+        format_name = str(form.get("format") or (upload.filename or "").rsplit(".", 1)[-1]).casefold()
+        on_conflict = str(form.get("on_conflict") or "update")
+        body = TerminologyImportRequest(format=format_name, content=payload.decode("utf-8-sig"), on_conflict=on_conflict)
+    else:
+        body = TerminologyImportRequest.model_validate(await request.json())
+    result = await service.import_terms(user, project_id, base_id, body, idempotency_key=idempotency_key)
+    if result.job is not None:
+        return JSONResponse(status_code=202, content=result.model_dump(mode="json"))
+    return result
+
+
+@project_terminology_router.post(
+    "/terminology-bases/{base_id}/terms/export",
+    description="导出当前项目术语；大数据集返回后台任务。",
+)
+async def export_terminology_terms(
+    project_id: UUID,
+    base_id: UUID,
+    http_request: Request,
+    request: ExportRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    user: User = Depends(get_current_user),
+    service: TerminologyWorkflowService = Depends(get_terminology_workflow_service),
+):
+    key = http_request.headers.get("Idempotency-Key") or idempotency_key
+    result = await service.export_terms(user, project_id, base_id, request, idempotency_key=key)
+    if isinstance(result, JobAccepted):
+        return JSONResponse(status_code=202, content=result.model_dump(mode="json"))
+    safe_filename = result.filename.replace('"', "").replace("\r", "").replace("\n", "")
+    return Response(
+        content=result.content,
+        media_type=result.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
+
+@project_terminology_router.post(
+    "/terminology-bases/{base_id}/terms/bulk-action",
+    response_model=BulkActionResponse,
+    description="在当前术语库中批量删除、设置必填或添加禁用译文。",
+)
+async def bulk_terminology_action(
+    project_id: UUID,
+    base_id: UUID,
+    request: BulkActionRequest,
+    http_request: Request,
+    user: User = Depends(get_current_user),
+    service: TerminologyWorkflowService = Depends(get_terminology_workflow_service),
+) -> BulkActionResponse:
+    return await service.bulk_action(
+        user,
+        project_id,
+        base_id,
+        request,
+        idempotency_key=http_request.headers.get("Idempotency-Key"),
+    )
+
+
+@project_terminology_router.post(
+    "/terminology-bases/{base_id}/terms/clear",
+    response_model=ClearResult,
+    description="清空当前术语库；需要 owner、二次确认、幂等键和精确计数。",
+)
+async def clear_terminology_terms(
+    project_id: UUID,
+    base_id: UUID,
+    request: ClearRequest,
+    http_request: Request,
+    user: User = Depends(get_current_user),
+    service: TerminologyWorkflowService = Depends(get_terminology_workflow_service),
+) -> ClearResult:
+    result = await service.clear(
+        user,
+        project_id,
+        base_id,
+        request,
+        idempotency_key=http_request.headers.get("Idempotency-Key"),
+    )
+    if result.job is not None:
+        return JSONResponse(status_code=202, content=result.model_dump(mode="json"))
+    return result
+
+
+@project_terminology_router.post(
+    "/terminology/extract",
+    response_model=JobAccepted,
+    status_code=202,
+    description="从项目文件异步提取候选术语。",
+)
+async def extract_terminology(
+    project_id: UUID,
+    request: ExtractRequest,
+    http_request: Request,
+    user: User = Depends(get_current_user),
+    service: TerminologyWorkflowService = Depends(get_terminology_workflow_service),
+) -> JobAccepted:
+    return await service.extract(user, project_id, request, idempotency_key=http_request.headers.get("Idempotency-Key"))
+
+
+@project_terminology_router.post(
+    "/terminology/mine",
+    response_model=JobAccepted,
+    status_code=202,
+    description="从项目可访问的翻译记忆库异步挖掘候选术语。",
+)
+async def mine_terminology(
+    project_id: UUID,
+    request: MineRequest,
+    http_request: Request,
+    user: User = Depends(get_current_user),
+    service: TerminologyWorkflowService = Depends(get_terminology_workflow_service),
+) -> JobAccepted:
+    return await service.mine(user, project_id, request, idempotency_key=http_request.headers.get("Idempotency-Key"))

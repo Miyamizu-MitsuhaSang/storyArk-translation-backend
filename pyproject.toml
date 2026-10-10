@@ -19,6 +19,7 @@ dependencies = [
     "translate-manager-rag",
     "uvicorn[standard]>=0.35.0",
     "openai>=3.26.1",
+    "openpyxl>=3.1.5",
 ]
 
 [project.optional-dependencies]

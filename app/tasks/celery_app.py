@@ -10,6 +10,8 @@ celery_app = Celery(
         "translation_backend.app.tasks.translation_memory",
         "translation_backend.app.tasks.documents",
         "translation_backend.app.tasks.cat",
+        "translation_backend.app.tasks.terminology",
+        "translation_backend.app.tasks.translation_tasks",
     ),
 )
 celery_app.conf.update(

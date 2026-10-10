@@ -14,7 +14,7 @@ from ....domain.shared.errors import DomainError
 from ...idempotency import IdempotencyConflictError, execute_idempotently
 from ..audit import ProjectAuditService
 from ....infrastructure.document.storage import DocumentStorageError, LocalDocumentStorage
-from ....models import BackgroundJob, Document, DocumentSegment, ProjectMember, User
+from ....models import BackgroundJob, Document, DocumentSegment, ProjectMember, ProjectVersion, User
 from ....repositories.document import DocumentRepository
 from .schemas import (
     DocumentExportRequest,
@@ -36,7 +36,7 @@ DOCUMENT_JOB_TYPES = {
     "export": "document_export",
     "purge": "document_purge",
 }
-SUPPORTED_FORMATS = {"xliff", "csv", "json", "po", "txt"}
+SUPPORTED_FORMATS = {"xliff", "csv", "xlsx", "json", "po", "txt"}
 
 
 class DocumentError(Exception):
@@ -112,6 +112,7 @@ class DocumentService:
         source_language: str,
         target_language: str,
         translation_memory_ids: list[UUID] | None = None,
+        version_id: UUID | None = None,
         idempotency_key: str | None = None,
     ) -> DocumentTaskResponse:
         return await self._idempotent(
@@ -128,12 +129,14 @@ class DocumentService:
                 "source_language": source_language,
                 "target_language": target_language,
                 "translation_memory_ids": [str(item) for item in (translation_memory_ids or [])],
+                "version_id": str(version_id) if version_id else None,
             },
             DocumentTaskResponse,
             lambda: self._upload_impl(
                 user, project_id, filename=filename, content_type=content_type, content=content,
                 name=name, source_language=source_language, target_language=target_language,
                 translation_memory_ids=translation_memory_ids,
+                version_id=version_id,
             ),
         )
 
@@ -149,8 +152,11 @@ class DocumentService:
         source_language: str,
         target_language: str,
         translation_memory_ids: list[UUID] | None = None,
+        version_id: UUID | None = None,
     ) -> DocumentTaskResponse:
         await self._membership(user, project_id)
+        if version_id is not None and not await ProjectVersion.filter(id=version_id, project_id=project_id).exists():
+            raise DocumentNotFoundError("项目业务版本不存在")
         file_format = self._format_for(filename)
         if file_format not in SUPPORTED_FORMATS:
             raise DocumentValidationError("不支持的文档格式")
@@ -170,6 +176,7 @@ class DocumentService:
             source_language=source_language,
             target_language=target_language,
             translation_memory_ids=[str(item) for item in (translation_memory_ids or [])],
+            project_version_id=version_id,
             status="uploaded",
         )
         storage_key = f"projects/{project_id}/documents/{document.id}/source.{file_format}"
@@ -510,6 +517,7 @@ class DocumentService:
         return DocumentResponse(
             id=document.id,
             project_id=document.project_id,
+            version_id=document.project_version_id,
             name=document.name,
             original_filename=document.file_name,
             format=document.file_format,

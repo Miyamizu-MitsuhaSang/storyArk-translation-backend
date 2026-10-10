@@ -142,3 +142,139 @@ class TerminologyMatchResponse(BaseModel):
 class TerminologySearchResponse(BaseModel):
     items: list[TerminologyMatchResponse] = Field(description="术语命中列表。")
     total: int = Field(description="命中总数。")
+
+
+class TerminologyImportRequest(BaseModel):
+    format: Literal["csv", "json"]
+    content: str = Field(min_length=1, max_length=10_000_000)
+    on_conflict: Literal["update", "skip", "error"] = "update"
+
+
+class TerminologyImportInvalidRow(BaseModel):
+    row: int = Field(ge=1)
+    code: str
+    message: str
+
+
+class TerminologyJobAccepted(BaseModel):
+    job_id: UUID
+    status: Literal["queued", "running", "failed"] = "queued"
+    type: Literal["terminology_import", "terminology_export", "terminology_extract", "terminology_mine"]
+
+
+class TerminologyImportResult(BaseModel):
+    created: int = Field(default=0, ge=0)
+    updated: int = Field(default=0, ge=0)
+    skipped: int = Field(default=0, ge=0)
+    invalid_rows: list[TerminologyImportInvalidRow] = Field(default_factory=list)
+    job: TerminologyJobAccepted | None = None
+
+
+ImportResult = TerminologyImportResult
+JobAccepted = TerminologyJobAccepted
+
+
+class TerminologyExportFilters(BaseModel):
+    q: str | None = Field(default=None, max_length=512)
+    category: str | None = Field(default=None, max_length=32)
+    required: bool | None = None
+
+
+class TerminologyExportRequest(BaseModel):
+    format: Literal["csv", "json"]
+    language_codes: list[str] | None = None
+    include_disabled: bool = True
+    filters: TerminologyExportFilters | None = None
+
+    @field_validator("language_codes")
+    @classmethod
+    def validate_languages(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized = [item.strip() for item in value]
+        if not normalized or any(not item for item in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("language_codes 不能为空且不能重复")
+        return normalized
+
+
+class TerminologyFileResponseData(BaseModel):
+    content: bytes
+    filename: str
+    media_type: str = "text/plain; charset=utf-8"
+
+
+FileResponseData = TerminologyFileResponseData
+ExportRequest = TerminologyExportRequest
+
+
+class TerminologyBulkActionRequest(BaseModel):
+    action: Literal["delete", "set_required", "add_disabled_translation"]
+    term_ids: list[UUID] = Field(min_length=1, max_length=100)
+    confirm: bool = False
+    expected_revisions: dict[str, int] = Field(default_factory=dict)
+    value: str | None = Field(default=None, max_length=512)
+
+    @field_validator("term_ids")
+    @classmethod
+    def validate_term_ids(cls, value: list[UUID]) -> list[UUID]:
+        if len(set(value)) != len(value):
+            raise ValueError("term_ids 不能重复")
+        return value
+
+
+class TerminologyBulkActionResponse(BaseModel):
+    affected: int = Field(ge=0)
+    items: list[TerminologyTermResponse] = Field(default_factory=list)
+
+
+BulkActionRequest = TerminologyBulkActionRequest
+BulkActionResponse = TerminologyBulkActionResponse
+
+
+class TerminologyClearRequest(BaseModel):
+    confirm: bool = False
+    expected_count: int = Field(ge=0)
+
+
+class TerminologyClearResult(BaseModel):
+    deleted: int = Field(ge=0)
+    job: TerminologyJobAccepted | None = None
+
+
+ClearResult = TerminologyClearResult
+ClearRequest = TerminologyClearRequest
+
+
+class TerminologyExtractRequest(BaseModel):
+    file_ids: list[UUID] = Field(min_length=1, max_length=100)
+    source_language: str = Field(min_length=1, max_length=16)
+    target_languages: list[str] = Field(min_length=1, max_length=16)
+    terminology_base_id: UUID
+
+    @field_validator("target_languages")
+    @classmethod
+    def validate_target_languages(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value]
+        if any(not item for item in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("target_languages 不能为空且不能重复")
+        return normalized
+
+
+class TerminologyMineRequest(BaseModel):
+    tm_base_ids: list[UUID] = Field(min_length=1, max_length=100)
+    source_language: str = Field(min_length=1, max_length=16)
+    target_languages: list[str] = Field(min_length=1, max_length=16)
+    min_occurrences: int = Field(default=2, ge=1, le=100_000)
+    terminology_base_id: UUID
+
+    @field_validator("target_languages")
+    @classmethod
+    def validate_mine_target_languages(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value]
+        if any(not item for item in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("target_languages 不能为空且不能重复")
+        return normalized
+
+
+ExtractRequest = TerminologyExtractRequest
+MineRequest = TerminologyMineRequest

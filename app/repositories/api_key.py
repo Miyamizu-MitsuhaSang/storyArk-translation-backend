@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from ..models import AIProviderCredential, Project, ProjectApiKeyBinding, User
+from ..models import AIProviderCredential, Project, ProjectApiKeyBinding, TranslationTask, User
 
 
 class ApiKeyRepository:
@@ -32,6 +32,15 @@ class ApiKeyRepository:
 
     async def delete(self, credential: AIProviderCredential) -> None:
         await credential.delete()
+
+    async def has_project_bindings(self, credential_id: UUID | str) -> bool:
+        return await ProjectApiKeyBinding.filter(api_key_id=credential_id).exists()
+
+    async def has_active_translation_tasks(self, credential_id: UUID | str) -> bool:
+        return await TranslationTask.filter(
+            api_key_id=credential_id,
+            status__in=["queued", "translating"],
+        ).exists()
 
 
 class ProjectApiKeyRepository:

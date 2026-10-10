@@ -2,7 +2,7 @@
 
 通用 CAT/AI 翻译平台 API 设计草案。本文档描述第一版业务 API 契约，作为 FastAPI 路由、Pydantic Schema 和前端 API client 的共同依据。
 
-当前仓库已实现认证、项目基础能力、健康检查、RAG 验证接口、翻译记忆（TM）核心查询、document 导入/解析/导出任务以及 CAT 工作台和审核工作流接口。CAT 的外部 RAG/LLM provider 调用暂未接入；运行时是否可用以 `/openapi.json` 和集成测试为准。
+当前仓库已实现认证、项目基础能力、健康检查、RAG 验证接口、翻译记忆（TM）核心查询以及 document 导入/解析/导出任务接口；segment 编辑工作流、术语、审核等部分仍按契约逐步接入。运行时是否可用以 `/openapi.json` 和集成测试为准。
 
 ## 文档源与同步
 
@@ -12,6 +12,7 @@
 docs/api.md
 src/translation_backend/docs/api.md
 src/translation_frontend/docs/api.md
+src/storyark_frontend/docs/api.md
 ```
 
 修改 API 文档后，在仓库根目录执行：
@@ -20,7 +21,7 @@ src/translation_frontend/docs/api.md
 ./scripts/sync-api-docs.sh
 ```
 
-不要直接编辑三个副本。未来将前端和后端拆成独立仓库时，可以把各自的 `docs/api.md` 和同步后的提交分别上传，不依赖跨仓库软链接。
+不要直接编辑四个副本。未来将前端和后端拆成独立仓库时，可以把各自的 `docs/api.md` 和同步后的提交分别上传，不依赖跨仓库软链接。
 
 ## 1. 基本约定
 
@@ -245,6 +246,74 @@ Request:
 ### GET `/auth/me`
 
 返回当前用户和可访问项目摘要。
+
+### GET `/auth/me/settings`
+
+读取当前登录用户的账户设置。该接口只返回用户级设置，不包含项目翻译设置；其中 `preferences.locale` 只表示网站界面语言，不表示翻译任务的源语言或目标语言。
+
+如果用户尚未保存设置，服务端使用默认值返回并创建对应记录：`appearance.theme` 默认为 `system`，`preferences.locale` 默认为 `zh-CN`。设置按用户隔离，客户端不能通过查询参数或请求体指定其他用户。
+
+成功返回 `200`：
+
+```json
+{
+  "appearance": {
+    "theme": "system",
+    "revision": 1,
+    "updated_at": "2026-10-09T00:00:00Z"
+  },
+  "preferences": {
+    "locale": "zh-CN",
+    "revision": 1,
+    "updated_at": "2026-10-09T00:00:00Z"
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `appearance.theme` | `string` | 外观主题：`light`、`dark` 或 `system`。`system` 表示跟随浏览器/操作系统主题。 |
+| `appearance.revision` | `integer` | 外观设置版本，用于并发更新控制。 |
+| `appearance.updated_at` | ISO 8601 时间 | 外观设置最近更新时间。 |
+| `preferences.locale` | `string` | 网站界面语言代码，例如 `zh-CN`、`en-US`；不影响项目语言方向。 |
+| `preferences.revision` | `integer` | 用户偏好版本，用于并发更新控制。 |
+| `preferences.updated_at` | ISO 8601 时间 | 用户偏好最近更新时间。 |
+
+### PATCH `/auth/me/settings`
+
+部分更新当前登录用户的账户设置。请求体可以只包含 `appearance`、`preferences` 中的一个分组，也可以同时包含两个分组；分组内只更新实际提交的字段，未提交字段保持原值。请求体不得包含 `user_id`。
+
+请求示例：
+
+```json
+{
+  "appearance": {
+    "theme": "dark",
+    "revision": 1
+  },
+  "preferences": {
+    "locale": "en-US",
+    "revision": 1
+  }
+}
+```
+
+请求字段说明：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `appearance.theme` | `string` | 否 | 允许值为 `light`、`dark`、`system`。 |
+| `appearance.revision` | `integer` | 否 | 提交时的外观版本；与服务端不一致返回 `409 SETTINGS_REVISION_CONFLICT`。 |
+| `preferences.locale` | `string` | 否 | 已支持的界面语言代码；不支持的语言返回 `422 UNSUPPORTED_LOCALE`。 |
+| `preferences.revision` | `integer` | 否 | 提交时的用户偏好版本；与服务端不一致返回 `409 SETTINGS_REVISION_CONFLICT`。 |
+
+空对象表示无变更，服务端仍返回当前完整 settings 对象。成功返回更新后的完整 settings 对象，状态码为 `200`。未登录返回 `401`；字段格式错误返回 `422`；当前用户以外的设置不可见。
+
+用户设置的扩展必须在所属作用域内增加有类型的字段，并同步数据库迁移、schema 校验、服务层、OpenAPI description、API 文档和测试。不要将外观、用户偏好和项目业务配置混入同一张无约束 JSON settings 表。项目级翻译设置继续使用项目路由和项目成员权限，不通过本接口修改。
+
+前端实现约定：登录或恢复会话后读取本接口；`theme=system` 时监听系统主题变化，显式 `light`/`dark` 覆盖系统主题；修改设置后调用 PATCH。`locale` 只切换网站界面文案。浏览器本地缓存只能作为启动优化，服务端响应是跨设备同步的事实来源；客户端应忽略未知未来字段，以兼容后续扩展。
 
 ### PATCH `/auth/me/password`
 
@@ -528,6 +597,8 @@ TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平�
 
 重复写请求应携带 `Idempotency-Key`。相同 key 重试必须返回同一业务结果；参数或版本不一致分别返回 `422` 或 `409 TRANSLATION_MEMORY_CONFLICT`。
 
+幂等结果保存在 PostgreSQL 的 `api_idempotency_records` 表中。Redis 可选地用于同一请求的短时并发锁，不是结果事实来源；Redis 未启用或不可用时，服务端仍使用数据库唯一约束处理竞争并重放已保存结果。
+
 ### 7.2 项目有效范围和检索
 
 `GET /projects/{project_id}/translation-memories` 返回当前用户在该项目可使用的 `platform` 库和自己的 `user` 库，并返回语言对、优先级、`content_version`、条目数和 `index_status`。项目成员关系是唯一有效范围来源，不能通过请求参数读取其他项目或其他用户的库。
@@ -562,8 +633,6 @@ segment 从 `approved` 转为 `confirmed` 时，工作流必须以 `origin=confi
 
 Redis 只用于可选的检索结果缓存，不改变权限判断和数据库事实来源。缓存 key 必须包含用户、项目、规范化查询、过滤条件及每个库的 `content_version`；Redis 不可用时自动降级为无缓存查询，不能导致接口失败。生产部署可设置 `TM_CACHE_ENABLED=true`、`TM_CACHE_TTL_SECONDS` 和 `TM_CACHE_NAMESPACE`，并监控命中率、查询耗时和缓存异常。
 
-Redis 的基础配置统一放在 `.env.app`：`REDIS_ENABLED` 是总开关，`REDIS_URL` 是连接地址；只有总开关与具体功能开关同时开启时，应用才初始化 Redis 客户端。`.env.db` 仅保存关系数据库连接参数，不再配置 Redis。Celery 的 `CELERY_BROKER_URL` 和 `CELERY_RESULT_BACKEND` 也继续由 `.env.app` 管理。
-
 数据量增长时按以下顺序演进：先使用数据库精确索引和 `cursor` 分页，随后为规范化原文哈希增加唯一索引；再将模糊/语义索引和批量重建移至 Celery worker，最后按租户或语言对分片。所有阶段都保留 `content_version`、幂等键和可重放导入记录，避免全量重建阻塞在线检索。
 
 ## 8. Document and import/export API
@@ -582,13 +651,14 @@ source_language: zh-CN
 target_language: en-US
 name: optional-display-name
 tm_ids[]: optional
+version_id: optional-project-version-uuid
 ```
 
 返回 `202 Accepted`：
 
 ```json
 {
-  "document": {"id": "doc-123", "status": "uploaded"},
+  "document": {"id": "doc-123", "version_id": "version-123", "status": "uploaded"},
   "job_id": "job-import-123"
 }
 ```
@@ -668,9 +738,11 @@ page_size, cursor, sort
 
 返回 `202` 和 `job_id`。通过任务接口查询完成状态，完成后返回临时下载 URL。
 
-## 9. CAT translation workbench API
+### GET `/jobs/{job_id}/download`
 
-本节接口已由 `app/api/modules/project/cat/workbench` 实现。片段锁、乐观版本、QA 结果和建议快照均由 application service 统一处理；本版本的建议只调用已有 TM、术语库和世界观业务，不发起外部 AI provider 请求。
+下载已完成的文档导出任务结果。仅任务所属项目的可见成员可访问；服务端返回的临时 URL 使用短时签名并在 15 分钟后失效，不暴露服务器文件路径。任务未完成、已失败、已取消或下载签名无效时分别返回 `409` 或 `404`。
+
+## 9. CAT translation workbench API
 
 ### GET `/projects/{project_id}/segments/{segment_id}`
 
@@ -792,10 +864,6 @@ Response `200`：
 
 ## 10. Translation workflow actions
 
-本节接口已由 `app/api/modules/project/cat/workflow` 实现。审核、退回、确认和撤销确认均校验项目成员角色、segment version 和允许的状态转换；confirm 会幂等写入当前用户 TM 并保留来源关联。
-
-批量动作最多同步处理 100 个 segment；超过 100 个时创建 `cat_bulk_action` 后台任务并返回 `202`。启用实际 Celery 派发需要设置 `CAT_TASKS_ENABLED=true`。
-
 ### POST `/projects/{project_id}/segments/{segment_id}/submit-review`
 
 将当前译文从 `translated` 或 `draft` 提交到 `in_review`。要求：持有锁、译文非空、必需 QA 错误已处理或明确豁免。
@@ -868,8 +936,6 @@ Response `200`：
 ### POST `/jobs/{job_id}/cancel`
 
 取消仍处于 `queued` 或 `running` 的可取消任务。
-
-成功返回统一任务对象，包含 `id`、`type`、`status`、`progress`、`message`、脱敏的 `result`、`error`、`created_at` 和 `finished_at`。任务取消后状态为 `cancelled`，worker 租约会被释放；已完成、失败或已取消的任务返回 `409`，任务不存在或当前用户无权访问时返回 `404`。
 
 ### GET `/projects/{project_id}/audit-events`
 
@@ -1036,42 +1102,13 @@ PATCH 请求包含 `revision` 与需要修改的字段，返回完整规则对�
 
 #### GET/POST `/projects/{project_id}/versions`
 
-GET 支持 `q`、游标分页和 `sort=created_at|name`。POST（`owner`/`manager`）请求 `{name,description?,source_language?,target_languages?}`，返回 `201` `{id,project_id,name,description,created_at,created_by}`。同项目版本名称冲突返回 `409 VERSION_NAME_EXISTS`。
+GET 支持 `q`、游标分页和 `sort=version_number|created_at|name`，默认按系统分配的 `version_number` 倒序。POST（`owner`/`manager`）请求 `{name?,description?,source_language?,target_languages?}`；`version_number` 由服务端按项目独立从 1 开始递增分配，客户端不能传入或修改。返回 `201` `{id,project_id,version_number,name,description,source_language,target_languages,created_at,updated_at,created_by}`。`name` 仅用于展示和搜索，允许为空和重复，不作为版本身份或关联依据。
 
 #### GET `/projects/{project_id}/versions/{version_id}/files`
 
 返回该版本内可用源文件的分页 `{items:[{id,name,source_language,format,updated_at,size_bytes}],next_cursor,total}`。无版本文件时返回空列表而非 404；版本不属于当前项目时按资源不可见返回 `404`。
 
-#### GET/POST `/projects/{project_id}/api-keys`
-
-项目 API key 接口只管理“用户 key 与项目的绑定关系”，不保存、不接收也不返回 secret。仅 `owner`/`manager` 可管理绑定；项目成员只能看到当前项目已授权使用的脱敏 key 元数据。
-
-GET 返回项目绑定列表：
-
-```json
-{
-  "items": [
-    {
-      "id": "project-key-binding-456",
-      "api_key_id": "user-key-123",
-      "provider": "openai",
-      "label": "工作账号",
-      "masked_secret": "sk-proj-••••••••1234",
-      "status": "active",
-      "is_default": true,
-      "created_at": "2026-09-24T03:05:00Z"
-    }
-  ],
-  "next_cursor": null,
-  "total": 1
-}
-```
-
-POST 将当前用户拥有的 key 绑定到项目，请求 `{api_key_id,is_default?}`。服务端必须校验该 key 属于当前用户、状态为 `active`，且调用方有权管理该项目；成功返回 `201` 绑定对象。绑定同一 key 的重试请求必须幂等；尝试绑定不属于当前用户的 key 返回 `404`，不得泄露其他用户的 key 是否存在。
-
-#### PATCH/DELETE `/projects/{project_id}/api-keys/{binding_id}`
-
-PATCH 只修改 `{status,is_default}`，同一项目最多一个 `is_default=true` 的绑定；DELETE 只解除项目绑定并返回 `204`，不会删除用户自己的 key。若绑定被活动翻译任务引用，删除返回 `409 API_KEY_IN_USE`。项目删除时绑定关系级联删除，但用户级 key 保留。
+项目不提供 API key 绑定或项目级 API key 管理接口。所有 provider key 都通过 `/auth/me/api-keys` 由用户管理，任务和其他项目能力只接收用户 API key UUID；同一用户的 key 可以跨项目复用。项目成员权限只决定能否使用项目资源，不改变 key 的所有权。
 
 API key secret 的安全要求适用于用户级 POST 和后端调用链路：生产环境只能通过 HTTPS/TLS 传输；服务端收到 secret 后必须在持久化前使用 AES-256-GCM 加密，只将密文、唯一 nonce/IV 和外部加密密钥版本写入数据库；AES 主密钥必须由数据库外的 KMS 或受控 secret manager 管理，并支持密钥轮换。仅在向 provider 发起请求前由受限后端短暂解密，任何响应、日志、审计、追踪、错误信息和导出均不得包含明文 secret。该方案是 TLS 加应用层静态加密，不是严格 E2E；后端代用户调用 provider 时必须能够解密。
 
@@ -1087,16 +1124,32 @@ GET 支持 `source_language`、`target_language`、`status=queued|translating|re
   "source_language":"zh-CN",
   "target_languages":["en","ko"],
   "file_ids":["file-1","file-2"],
-  "project_api_key_id":"project-key-binding-456",
-  "version_id":"version-12"
+  "api_key_id":"user-key-123",
+  "version_id":"version-12",
+  "model_type":"openai.chat",
+  "model":"gpt-4o-mini",
+  "source_column":"source",
+  "target_columns":[{"language":"en","column":"en"},{"language":"ko","column":"ko"}],
+  "sheet_names":["Translations"],
+  "overwrite":false
 }
 ```
 
-名称、至少一个目标语言、至少一个属于该项目且源语言一致的文件，以及有效项目 API key 绑定为必填；`version_id` 可省略。目标语言不能等于源语言，目标列表不得重复。任务只引用 `project_api_key_id`，返回项目绑定 ID 与脱敏的 provider/label，不返回用户 key 原文。请求须带 `Idempotency-Key`。成功 `201` 返回 `{id,project_id,name,source_language,target_languages,file_ids,version_id,project_api_key:{id,api_key_id,provider,label,masked_secret},status:"queued",progress:0,created_at}`。校验失败返回 `422` 字段错误。
+名称、至少一个目标语言、至少一个属于该项目且源语言一致的文件，以及当前用户拥有且处于 `active` 状态的用户级 API key 为必填；表格批量翻译还必须提供受控 `model_type`、`model`、`source_column` 和 `target_columns`，当前支持 CSV/XLSX。`version_id` 可省略。API key 不绑定项目，同一用户的 key 可以跨项目复用。目标语言不能等于源语言，目标列表不得重复。任务只引用用户级 `api_key_id` 的 UUID，并保存 provider、label、masked secret 快照；不返回用户 key 原文，也不使用自定义名称建立关联。请求须带 `Idempotency-Key`。成功 `201` 返回任务状态、`job_id`、模型配置和脱敏 key 元数据。校验失败返回 `422` 字段错误。
 
 #### GET `/projects/{project_id}/translation-tasks/{task_id}`
 
 返回完整任务元数据、状态、进度、文件数、目标语言、版本和脱敏的模型凭据引用。状态定义为 `queued`、`translating`、`review`、`completed`、`failed`、`cancelled`；`progress` 范围 0..100。客户端不能通过 PATCH 任意伪造进度或越过工作流状态。
+
+#### POST `/projects/{project_id}/translation-tasks/{task_id}/cancel`
+
+取消 `queued` 或 `translating` 状态的任务，同时释放对应 `BackgroundJob` 租约。已进入 `review`、`completed`、`failed` 或 `cancelled` 的任务返回 `409 TRANSLATION_TASK_CONFLICT`。
+
+#### GET `/projects/{project_id}/translation-tasks/{task_id}/output`
+
+仅项目成员可下载已进入 `review` 状态的 CSV/XLSX 结果。服务端根据任务 UUID 生成文件响应，不返回真实存储路径或 `storage_key`。任务未完成、输出不存在或任务不可见时返回 `404`/`409`。
+
+批量翻译完成后只进入 `review`，不会自动将 CAT segment 设为 `in_review`、`approved` 或 `confirmed`；后续审核必须通过现有 segment 工作流逐片段执行。
 
 ### 15.5 Analytics
 
@@ -1112,7 +1165,7 @@ GET 支持 `source_language`、`target_language`、`status=queued|translating|re
 | `user_id` | UUID，可空 | 用户 ID 快照，用户删除后仍保留历史统计 |
 | `project_id` | UUID，可空 | 项目 ID 快照；用户级调用为空 |
 | `api_key_id` | UUID，可空 | 用户 API key ID 快照，不使用会级联删除历史的外键 |
-| `project_api_key_binding_id` | UUID，可空 | 项目 API key 绑定 ID 快照 |
+| `api_key_id` | UUID，可空 | 用户 API key ID 快照；不建立外键，用户 key 删除后保留历史统计 |
 | `provider` | string | 调用时的 provider 快照 |
 | `model` | string | 调用时的模型标识 |
 | `provider_request_id` | string，可空 | provider 请求 ID；与 `provider` 组合用于幂等去重 |
@@ -1219,11 +1272,10 @@ model=gpt-5.6-luna              # 可选
 返回当前项目的 token 用量总览，权限遵循项目报表读取权限。除 `range`、`from`、`to`、`timezone`、`granularity`、`provider`、`model` 外，支持：
 
 ```text
-project_api_key_id=project-key-binding-456
 api_key_id=user-key-123
 ```
 
-服务端必须校验筛选的 key 属于该项目的绑定关系，不能通过参数探测其他项目或用户的 key。响应结构与 `/auth/me/analytics/usage` 相同，但 `by_api_key` 只包含该项目绑定且在查询范围内产生调用的 key。
+服务端必须校验筛选的 key 属于当前用户且该用户是项目成员，不能通过参数探测其他项目或用户的 key。响应结构与 `/auth/me/analytics/usage` 相同，但 `by_api_key` 只包含该项目范围内产生调用的用户 key。
 
 前端可使用 `totals` 渲染顶部指标卡，使用 `trend` 绘制“每日用量与成本”双轴折线图，使用 `by_model` 或 `by_api_key` 渲染明细表。图表示例中的数值仅为展示数据，不属于接口固定值。
 
@@ -1247,4 +1299,4 @@ Redis 不是用量事实来源，也不是必需依赖。调用完成后应先�
 
 ### 15.6 Runtime boundary
 
-以上新增路径是 API 契约，不表示当前 FastAPI 已具备相应 handler、数据库表、任务队列、AI 服务或聚合查询。部署前必须分别实现后端路由/schema/service、项目权限、迁移与后台 job，并用 HTTP 集成测试逐路由验证；仅文档检查或本地演示适配器测试不构成后端可用性证明。
+以上新增路径已具备对应的 FastAPI handler、schema、service、项目权限校验和 analytics migration；translation-report 当前返回权限校验后的零汇总占位结果。SQLite 测试和 OpenAPI 检查不等同于 PostgreSQL migration、Redis、Celery、真实 provider 或生产部署已验证，部署前仍需分别完成这些外部依赖验收。

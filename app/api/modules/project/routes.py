@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, Request
 from starlette.responses import JSONResponse, Response
 from uuid import UUID
 
-from .api_key.routes import project_api_key_router
 from .document.routes import project_document_router
+from .version.routes import project_version_router
+from .translation_task.routes import translation_task_router
 from .audit_routes import project_audit_router
 from .cat.router import project_cat_router
 from ...shared.dependencies import get_current_user
@@ -31,8 +32,9 @@ from ....application.project.service import ProjectError, ProjectService
 from ....models import User
 
 project_router = APIRouter(prefix="/projects", tags=["projects"])
-project_router.include_router(project_api_key_router, prefix="/{project_id}/api-keys", tags=["api-key"])
 project_router.include_router(project_document_router, prefix="/{project_id}/documents", tags=["documents"])
+project_router.include_router(project_version_router, prefix="/{project_id}/versions", tags=["versions"])
+project_router.include_router(translation_task_router, prefix="/{project_id}/translation-tasks", tags=["translation-tasks"])
 project_router.include_router(project_cat_router, prefix="/{project_id}", tags=["cat"])
 project_router.include_router(project_content_router, prefix="/{project_id}", tags=["content"])
 project_router.include_router(project_audit_router, tags=["audit"])

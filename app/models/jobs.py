@@ -11,6 +11,13 @@ from tortoise.expressions import Q
 from .base import TimestampedModel
 
 JOB_STATUSES = ("queued", "running", "succeeded", "failed", "cancelled")
+TERMINOLOGY_JOB_TYPES = (
+    "terminology_import",
+    "terminology_export",
+    "terminology_clear",
+    "terminology_extract",
+    "terminology_mine",
+)
 _SENSITIVE_VALUE = re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*[^,\s;]+")
 
 
@@ -132,6 +139,7 @@ class BackgroundJob(TimestampedModel):
         worker_id: str,
         now: datetime | None = None,
         retry_delay_seconds: int | None = None,
+        terminal: bool = False,
     ) -> None:
         now = now or datetime.now(timezone.utc)
         async with transactions.in_transaction() as connection:
@@ -143,7 +151,7 @@ class BackgroundJob(TimestampedModel):
             current.error_message = _safe_error_message(error_message)
             current.worker_id = None
             current.lease_expires_at = None
-            if current.attempts >= current.max_attempts:
+            if terminal or current.attempts >= current.max_attempts:
                 current.status = "failed"
                 current.finished_at = now
             else:

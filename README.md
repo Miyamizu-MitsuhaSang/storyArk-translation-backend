@@ -1,6 +1,6 @@
 # StoryArk Translation Backend
 
-StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 RAG SDK 的稀疏向量检索接口。当前 RAG 索引保存在进程内存中，进程重启后需要重新构建；CAT 工作台和审核工作流已接入项目路由，外部 LLM/provider 调用暂未启用。
+StoryArk 的 FastAPI 后端，提供认证、项目工作区、CAT 工作流、翻译任务、AI provider 用量统计，以及基于独立 RAG SDK 的稀疏向量检索接口。外部 LLM/provider 默认关闭，只有配置 provider、加密主密钥和可用网络后才会由 worker 调用。
 
 ## 当前接口
 
@@ -27,8 +27,11 @@ StoryArk 的 FastAPI 后端，提供认证、健康检查，以及基于独立 R
 | `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/reject` | 审核退回 |
 | `POST` | `/api/v1/projects/{project_id}/segments/{segment_id}/confirm` | 确认并写入 TM |
 | `POST` | `/api/v1/projects/{project_id}/segments/bulk-action` | 批量工作流动作 |
+| `GET` | `/api/v1/auth/me/analytics/usage` | 当前用户 AI provider 用量统计 |
+| `GET` | `/api/v1/projects/{project_id}/analytics/usage` | 项目 AI provider 用量统计 |
+| `GET` | `/api/v1/projects/{project_id}/analytics/translation-report` | 项目翻译报告零汇总占位接口 |
 
-完整 API 契约见 [`docs/api.md`](docs/api.md)。翻译记忆当前提供用户库 CRUD、项目有效范围、精确/fuzzy 检索、异步重建和任务状态查询；运行时路由以 `/docs` 和 `/openapi.json` 为准。
+完整 API 契约见 [`docs/api.md`](docs/api.md)。翻译记忆当前提供用户库 CRUD、项目有效范围、精确/fuzzy 检索、异步重建和任务状态查询；analytics 统计以 PostgreSQL 明细为事实来源，Redis 只作可选短 TTL 缓存；运行时路由以 `/docs` 和 `/openapi.json` 为准。
 
 ## TM 功能说明
 
@@ -213,12 +216,18 @@ uv run pytest -q
 # TM 单元、worker、索引、HTTP、维护和重启恢复测试
 uv run pytest tests/test_translation_memory_* -q
 
+# 第 15 章工作区、任务和 analytics 验收
+uv run pytest tests/test_translation_workspace_* tests/test_terminology_workflows.py \
+  tests/test_project_versions_api.py tests/test_translation_tasks_* tests/test_usage_analytics_* -q
+
 # Python 编译和空白差异检查
 uv run python -m compileall -q app main.py
 git diff --check
 ```
 
 测试使用临时 SQLite、临时 artifact store 和 Celery eager/任务替身验证核心行为，包括：TM 条目写入、exact 查询、索引构建、fuzzy 查询、checksum 拒绝、版本竞争、任务租约、重试、过期任务回收、产物清理和进程重启后的活动产物加载。它们不能替代真实 PostgreSQL、Redis、Celery broker、文件权限和多进程部署验证。
+
+Task 8 的验收还覆盖第 15 章 OpenAPI 路径、响应模型、`Idempotency-Key`、用户级 API key 脱敏、项目版本创建、analytics 权限隔离和跨项目 `404`。`translation-report` 当前仅提供权限校验后的零汇总占位结果；真实词数统计属于后续实现范围。
 
 启用真实服务后，建议依次运行：
 
@@ -231,6 +240,8 @@ curl -fsS http://127.0.0.1:8000/openapi.json >/tmp/translation-openapi.json
 ```
 
 然后设置 `TM_INDEX_TASKS_ENABLED=true`，启动 Celery worker 和 Beat，提交一次 reindex，轮询 `/api/v1/jobs/{job_id}`，再使用 `match_mode=fuzzy` 验证结果。`/health` 成功只说明进程可响应；PostgreSQL、Redis、Celery、TM 索引和外部模型仍需分别检查。不要把文档同步或容器启动成功当作业务接口已完成的证明。
+
+在当前源码布局中，Aerich 需要通过项目运行入口提供 `TORTOISE_ORM` 配置；如果直接在 `src/translation_backend` 目录执行 `uv run aerich heads` 报配置加载错误，应先按部署入口注入配置，再在备份的 PostgreSQL 验证库执行 migration。SQLite 测试不会证明 PostgreSQL migration、Redis 连接、Celery broker、真实 provider、TLS 终止或生产签名配置可用。
 
 ## Docker
 

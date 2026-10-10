@@ -69,6 +69,7 @@ async def upload_document(
     source_language: Annotated[str, Form(description="源语言 BCP 47 标签。")],
     target_language: Annotated[str, Form(description="目标语言 BCP 47 标签。")],
     name: Annotated[str | None, Form(description="可选的项目内显示名称。")] = None,
+    version_id: Annotated[UUID | None, Form(description="可选的项目业务版本 ID。")] = None,
     tm_ids: Annotated[list[UUID] | None, Form(description="可选的翻译记忆库 ID 列表。", alias="tm_ids[]")] = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", description="可重试上传的幂等键。"),
     user: User = Depends(get_current_user),
@@ -85,6 +86,7 @@ async def upload_document(
         source_language=source_language,
         target_language=target_language,
         translation_memory_ids=tm_ids,
+        version_id=version_id,
         idempotency_key=idempotency_key,
     )
 

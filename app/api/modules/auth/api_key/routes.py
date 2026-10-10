@@ -9,7 +9,13 @@ from .....application.auth.api_key.schemas import (
     CreateApiKeyRequest,
     UpdateApiKeyRequest,
 )
-from .....application.auth.api_key.service import ApiKeyError, ApiKeyService
+from .....application.auth.api_key.service import (
+    ApiKeyError,
+    ApiKeyInsecureTransportError,
+    ApiKeyService,
+)
+from .....core.config import security_settings
+from .....core.security import is_secure_api_key_transport
 from ....shared.dependencies import get_current_user
 from .dependencies import get_api_key_service
 from .....models import User
@@ -36,6 +42,16 @@ def register_api_key_exception_handler(app) -> None:
     app.add_exception_handler(ApiKeyError, _handle_api_key_error)
 
 
+async def require_secure_api_key_transport(request: Request) -> None:
+    if not security_settings.auth_api_key_require_https:
+        return
+    if not is_secure_api_key_transport(
+        request,
+        trust_forwarded_proto=security_settings.auth_api_key_trust_forwarded_proto,
+    ):
+        raise ApiKeyInsecureTransportError("创建 API key 必须通过 HTTPS 传输")
+
+
 @user_api_router.get(
     "",
     response_model=ApiKeyPage,
@@ -58,6 +74,7 @@ async def list_api_keys(
 )
 async def create_api_key(
     request: CreateApiKeyRequest,
+    _: None = Depends(require_secure_api_key_transport),
     user: User = Depends(get_current_user),
     service: ApiKeyService = Depends(get_api_key_service),
 ) -> CreatedApiKeyResponse:

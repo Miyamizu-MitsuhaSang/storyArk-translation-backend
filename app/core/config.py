@@ -36,6 +36,11 @@ class AppSettings(BaseSettings):
     idempotency_lock_ttl_seconds: int = Field(default=300, ge=1, le=3600)
     idempotency_redis_namespace: str = "idempotency"
     cat_tasks_enabled: bool = False
+    translation_tasks_enabled: bool = False
+    ai_provider_enabled: bool = False
+    analytics_cache_enabled: bool = False
+    analytics_cache_ttl_seconds: int = Field(default=60, ge=30, le=120)
+    analytics_cache_namespace: str = "analytics"
     tm_semantic_model_zh_enabled: bool = False
     tm_semantic_model_en_enabled: bool = False
     tm_semantic_model_ja_enabled: bool = False
@@ -68,6 +73,10 @@ class SecuritySettings(BaseSettings):
     auth_refresh_token_ttl_days: int = 30
     auth_api_key_encryption_key: str | None = None
     auth_api_key_encryption_key_version: str = "v1"
+    # API key secrets must only be submitted over TLS when enabled.
+    auth_api_key_require_https: bool = True
+    # Only enable when TLS is terminated by a trusted reverse proxy.
+    auth_api_key_trust_forwarded_proto: bool = False
 
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_DIR / ".env.security",

@@ -4,6 +4,7 @@ import base64
 import json
 from uuid import UUID
 
+from tortoise import transactions
 from tortoise.exceptions import IntegrityError
 
 from ....domain.api_key.policies import ApiKeyPolicy
@@ -14,7 +15,7 @@ from .schemas import (
     ProjectApiKeyResponse,
     UpdateProjectApiKeyRequest,
 )
-from ....models import Project, ProjectApiKeyBinding, ProjectMember, User
+from ....models import AIProviderCredential, Project, ProjectApiKeyBinding, ProjectMember, User
 from ....repositories import ApiKeyRepository, ProjectApiKeyRepository, ProjectRepository
 
 
@@ -74,24 +75,61 @@ class ProjectApiKeyService:
         except DomainError as exc:
             raise ProjectApiKeyNotFoundError(str(exc)) from exc
 
-        binding = await self._bindings.find_for_key(project, api_key) if api_key is not None else None
-        if binding is not None:
-            if request.is_default and not binding.is_default:
-                await self._bindings.clear_default(project)
-                binding.is_default = True
-                await self._bindings.save(binding, update_fields=["is_default"])
-            return self._response(binding)
-
-        if request.is_default:
-            await self._bindings.clear_default(project)
-        try:
-            binding = await self._bindings.create(
-                project=project,
-                api_key=api_key,
-                is_default=request.is_default,
+        if api_key is None:
+            raise ProjectApiKeyNotFoundError("API key 不存在或不可用")
+        async with transactions.in_transaction() as connection:
+            locked_project = (
+                await Project.filter(id=project.id)
+                .using_db(connection)
+                .select_for_update()
+                .first()
             )
-        except IntegrityError as exc:
-            raise ProjectApiKeyConflictError("API key 已绑定到项目") from exc
+            if locked_project is None:
+                raise ProjectApiKeyNotFoundError("项目不存在或当前用户不可见")
+            locked_key = await AIProviderCredential.filter(
+                id=api_key.id,
+                user_id=user.id,
+                is_active=True,
+            ).using_db(connection).first()
+            if locked_key is None:
+                raise ProjectApiKeyNotFoundError("API key 不存在或不可用")
+            binding = (
+                await ProjectApiKeyBinding.filter(project_id=project.id, api_key_id=api_key.id)
+                .using_db(connection)
+                .select_related("api_key")
+                .first()
+            )
+            if binding is not None:
+                if request.is_default and not binding.is_default:
+                    await ProjectApiKeyBinding.filter(
+                        project_id=project.id,
+                        is_default=True,
+                    ).using_db(connection).update(is_default=False)
+                    binding.is_default = True
+                    await binding.save(using_db=connection, update_fields=["is_default", "updated_at"])
+                return self._response(binding)
+            if request.is_default:
+                await ProjectApiKeyBinding.filter(
+                    project_id=project.id,
+                    is_default=True,
+                ).using_db(connection).update(is_default=False)
+            try:
+                created = await ProjectApiKeyBinding.create(
+                    project_id=project.id,
+                    api_key_id=api_key.id,
+                    is_default=request.is_default,
+                    using_db=connection,
+                )
+            except IntegrityError as exc:
+                raise ProjectApiKeyConflictError("API key 已绑定到项目") from exc
+            binding = await (
+                ProjectApiKeyBinding.filter(id=created.id)
+                .using_db(connection)
+                .select_related("api_key")
+                .first()
+            )
+        if binding is None:
+            raise ProjectApiKeyConflictError("API key 绑定创建失败")
         return self._response(binding)
 
     async def update(
@@ -106,6 +144,10 @@ class ProjectApiKeyService:
         if binding is None:
             raise ProjectApiKeyNotFoundError("项目 API key 绑定不存在")
         changes = request.model_dump(exclude_unset=True)
+        if changes.get("status") == "active":
+            credential = await self._api_keys.find_owned(binding.api_key.user_id, binding.api_key.id)
+            if credential is None or not credential.is_active:
+                raise ProjectApiKeyNotFoundError("用户级 API key 不存在或不可用")
         if changes.get("is_default"):
             await self._bindings.clear_default(project)
         for field, value in changes.items():

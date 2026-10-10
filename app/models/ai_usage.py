@@ -71,3 +71,16 @@ class AIUsageRecord(TimestampedModel):
             ("completed_at",),
         ]
         unique_together = (("provider", "provider_request_id"),)
+
+    async def save(self, *args, **kwargs):
+        for field_name in ("input_tokens", "output_tokens", "cached_input_tokens", "reasoning_tokens", "total_tokens"):
+            value = getattr(self, field_name, 0)
+            if value is not None and value < 0:
+                raise ValueError(f"{field_name} 不能为负数")
+        if self.cost is not None and self.cost < 0:
+            raise ValueError("cost 不能为负数")
+        if self.latency_ms is not None and self.latency_ms < 0:
+            raise ValueError("latency_ms 不能为负数")
+        if self.pk and await type(self).filter(pk=self.pk).exists():
+            raise ValueError("AI usage record 不可修改")
+        return await super().save(*args, **kwargs)

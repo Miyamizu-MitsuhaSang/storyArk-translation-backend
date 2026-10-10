@@ -8,6 +8,7 @@ from .service import (
     TerminologyService,
     TerminologyTermNotFoundError,
 )
+from .workflows import TerminologyWorkflowService
 
 __all__ = [
     "TerminologyBaseNotFoundError",
@@ -16,4 +17,5 @@ __all__ = [
     "TerminologyForbiddenError",
     "TerminologyService",
     "TerminologyTermNotFoundError",
+    "TerminologyWorkflowService",
 ]

@@ -47,6 +47,7 @@ class DocumentExportRequest(BaseModel):
 class DocumentResponse(BaseModel):
     id: UUID = Field(description="文档业务 ID。")
     project_id: UUID = Field(description="所属项目 ID。")
+    version_id: UUID | None = Field(default=None, description="可选的项目业务版本 ID。")
     name: str = Field(description="文档显示名称。")
     original_filename: str = Field(description="上传时的原始文件名。")
     format: str = Field(description="文档格式。")

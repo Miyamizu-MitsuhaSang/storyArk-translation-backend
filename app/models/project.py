@@ -45,6 +45,10 @@ class Project(TimestampedModel):
         on_delete=fields.SET_NULL,
         description="项目创建者；用户删除后保留项目并清空此关联。",
     )
+    next_version_number = fields.IntField(
+        default=1,
+        description="下一个项目业务版本编号；由服务端在项目行锁内递增，不对外暴露。",
+    )
 
     class Meta:
         table = "projects"

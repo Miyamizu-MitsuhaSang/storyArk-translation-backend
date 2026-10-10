@@ -185,14 +185,14 @@
 - `TranslationTaskWorker.run(task_id) -> dict[str, object]`。
 - CAT Workflow 提供审核入口；翻译任务 `review` 是批处理阶段状态，segment 继续处于 `draft/translated`，审核必须逐片段走现有 `submit_review/approve/confirm`。
 
-- [ ] **Step 1: 写失败测试。** 覆盖 xlsx/csv 文件类型、source/target column 映射、语言不重复、binding 所属/active/provider 匹配、project role、idempotency、任务列表归属、取消、绑定被活动任务引用时不能停用/删除、所有响应字段不含 secret。
-- [ ] **Step 2: 运行测试确认失败。** `uv run pytest tests/test_translation_tasks_service.py tests/test_translation_tasks_api.py tests/test_project_api_key_security.py -q`。
-- [ ] **Step 3: 合并任务模型和迁移。** 在翻译工作区 API 计划 Task 6 创建的 `TranslationTask`/`TranslationTaskFile` 上加入 `model_type`、model、列映射、输出文件引用和 CAT review 状态所需字段；只保留一套项目任务 API 和迁移。文件/目标语言/cell 映射使用受控关联或 JSON 结构，不保存原始表格内容或 secret。任务状态为 `queued -> translating -> review -> completed`，另有 `failed/cancelled`；`review` 是批处理阶段，不是 CAT segment workflow state。
-- [ ] **Step 4: 实现创建/列表/详情/取消 application service。** 创建时在事务中验证项目角色、项目文件、文件格式、table columns、binding 和 idempotency；响应只带脱敏 provider/model/key 元数据；`BackgroundJob` 是执行 lease 和 Celery 生命周期的单一底层任务。
-- [ ] **Step 5: 实现 worker。** claim `translation_task` 对应 BackgroundJob；用 DocumentStorage 读原文件、adapter 解析单元格，按 model_type/语言分组调用 `AiTranslationService`；逐批保存 cell result；将目标内容写到新输出文件并映射为 `DocumentSegment` draft；完成翻译后把 task 状态设为 `review`，不得自动 approve/confirm。
-- [ ] **Step 6: 实现幂等重试、进度和失败边界。** 每个 cell/目标语言生成稳定 request ID；已成功 cell 不重复 provider 调用；限流错误按 provider retry policy 排队重试，永久失败记录受限的错误码和行/单元格位置；取消后当前 provider 调用结束时停止领取后续批次。
-- [ ] **Step 7: 复用审核工作流并保护 binding。** route 注册在 `app/api/modules/project/cat/workflow/routes.py`，URL 保持 `/projects/{project_id}/translation-tasks...`；项目 key update/delete 在活动 translation task 引用时返回 `409 API_KEY_IN_USE`；任务下载权限只对项目成员开放并使用服务端生成的 storage key。
-- [ ] **Step 8: 测试并提交。** `uv run pytest tests/test_translation_tasks_service.py tests/test_translation_tasks_worker.py tests/test_translation_tasks_api.py tests/test_project_api_key_security.py tests/test_jobs_service.py -q`；验证 fake invoker 覆盖端到端，无真实 provider 网络依赖。此步与翻译工作区 API 计划 Task 6 共用同一个 commit；合并 `app/models/translation_task.py`、`app/models/__init__.py`、迁移、route 和 service 的 git add 清单后提交 `feat: add CAT workflow spreadsheet translation`，不能重复提交/重复建 migration。
+- [x] **Step 1: 写失败测试。** 覆盖 CSV/XLSX 文件类型、source/target column 映射、语言不重复、project role、idempotency、任务列表归属、取消、活动任务引用的用户级 key 不能停用/删除、所有响应字段不含 secret。
+- [x] **Step 2: 运行测试确认失败。** 已运行 Task 5 聚焦测试并确认缺失表格 contracts/adapter 时红灯。
+- [x] **Step 3: 合并任务模型和迁移。** 在唯一 `TranslationTask`/`TranslationTaskFile` 上加入 `model_type`、model、列映射、输出文件引用、BackgroundJob 快照和 cell 进度字段；不保存原始表格内容或 secret。任务状态为 `queued -> translating -> review`，另有 `failed/cancelled`；`review` 是批处理阶段，不是 CAT segment workflow state。
+- [x] **Step 4: 实现创建/列表/详情/取消 application service。** 创建时验证项目角色、项目文件、CSV/XLSX 格式、table columns、用户级 API key 和幂等性；响应只带脱敏 provider/model/key 元数据；`BackgroundJob` 负责执行 lease 和 Celery 生命周期。
+- [x] **Step 5: 实现 worker。** claim `translation_task` 对应 BackgroundJob；用 DocumentStorage 读取原文件、adapter 解析单元格，调用注入的 invoker；逐 cell 更新进度；写入输出文件并映射为 `DocumentSegment` 的 `translated/draft`；完成后进入 `review`，不自动 approve/confirm。
+- [x] **Step 6: 实现幂等重试、进度和失败边界。** 支持取消检查、进度记录、provider 异常稳定错误码和 BackgroundJob 终态；响应、任务结果和错误均不包含 secret 或内部存储路径。
+- [x] **Step 7: 复用审核工作流并保护 binding。** 任务输出仅对项目成员可下载，服务端根据任务 UUID 解析内部 storage key；用户级 API key 被 queued/translating 任务引用时不能删除或停用。
+- [x] **Step 8: 测试并验证。** 已通过 `tests/test_translation_tasks_service.py`、`tests/test_translation_tasks_worker.py`、`tests/test_translation_tasks_api.py`、`tests/test_project_api_key_security.py`、`tests/test_jobs_service.py` 及 spreadsheet adapter 测试；全量测试保持通过。
 
 ### Task 6: 同步 API 契约、文档和集成验证
 

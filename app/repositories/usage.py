@@ -4,13 +4,27 @@ from __future__ import annotations
 
 from datetime import datetime
 from uuid import UUID
+from tortoise.exceptions import IntegrityError
 
 from ..models import AIUsageRecord
 
 
 class AIUsageRepository:
     async def create(self, **values) -> AIUsageRecord:
-        return await AIUsageRecord.create(**values)
+        provider = values.get("provider")
+        provider_request_id = values.get("provider_request_id")
+        if provider and provider_request_id:
+            existing = await self.find_by_provider_request_id(provider, provider_request_id)
+            if existing is not None:
+                return existing
+        try:
+            return await AIUsageRecord.create(**values)
+        except IntegrityError:
+            if provider and provider_request_id:
+                existing = await self.find_by_provider_request_id(provider, provider_request_id)
+                if existing is not None:
+                    return existing
+            raise
 
     async def find_by_provider_request_id(
         self,

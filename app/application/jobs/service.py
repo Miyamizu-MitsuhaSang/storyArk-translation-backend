@@ -8,7 +8,7 @@ from uuid import UUID
 
 from ...core.config import app_settings, security_settings
 from ...infrastructure.document.storage import LocalDocumentStorage
-from ...models import BackgroundJob, Document, ProjectMember, TranslationMemoryLibrary, User
+from ...models import BackgroundJob, Document, ProjectMember, TerminologyBase, TranslationMemoryLibrary, TranslationTask, User
 from .schemas import JobErrorResponse, JobStatusResponse
 
 
@@ -90,6 +90,12 @@ class JobsService:
         if job.resource_type in {"translation_memory_library", "translation_memory"}:
             library = await TranslationMemoryLibrary.filter(id=job.resource_id).first()
             return bool(library and (library.scope == "platform" or library.owner_user_id == user.id))
+        if job.resource_type == "terminology_base":
+            base = await TerminologyBase.filter(id=job.resource_id).first()
+            return bool(base and await ProjectMember.filter(project_id=base.project_id, user_id=user.id).exists())
+        if job.resource_type == "translation_task":
+            task = await TranslationTask.filter(id=job.resource_id).first()
+            return bool(task and await ProjectMember.filter(project_id=task.project_id, user_id=user.id).exists())
         return False
 
     @staticmethod

@@ -25,6 +25,9 @@ from .translation_memory import (
     TranslationMemoryIndexArtifact,
     TranslationMemoryLibrary,
 )
+from .translation_settings import CultureRule, TranslationRole, TranslationRule
+from .version import ProjectVersion
+from .translation_task import TranslationTask, TranslationTaskFile
 
 __all__ = [
     "AIProviderCredential",
@@ -55,4 +58,10 @@ __all__ = [
     "TranslationMemoryEntrySource",
     "TranslationMemoryImport",
     "TranslationMemoryIndexArtifact",
+    "TranslationRole",
+    "TranslationRule",
+    "CultureRule",
+    "ProjectVersion",
+    "TranslationTask",
+    "TranslationTaskFile",
 ]
