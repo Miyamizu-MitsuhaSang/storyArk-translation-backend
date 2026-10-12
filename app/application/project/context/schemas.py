@@ -8,19 +8,19 @@ from pydantic import BaseModel, Field
 from ..worldview.schemas import WorldviewEntryResponse, WorldviewResponse
 
 
-ContextSource = Literal["worldview", "terms", "tm", "neighbors"]
+ContextSource = Literal["worldview", "terms", "translation_memory", "neighbors"]
 
 
 class ContextQuery(BaseModel):
     segment_id: str | None = Field(default=None, description="当前 segment ID；文档/segment 模块接入后用于邻近上下文聚合。")
     q: str | None = Field(default=None, max_length=500, description="用于匹配世界观条目和上下文关键词的文本。")
     include: str = Field(
-        default="worldview,terms,tm,neighbors",
-        description="逗号分隔的上下文来源：worldview、terms、tm、neighbors。",
+        default="worldview,terms,translation_memory,neighbors",
+        description="逗号分隔的上下文来源：worldview、terms、translation_memory、neighbors。",
     )
 
     def requested_sources(self) -> list[ContextSource]:
-        allowed = {"worldview", "terms", "tm", "neighbors"}
+        allowed = {"worldview", "terms", "translation_memory", "neighbors"}
         values = [value.strip() for value in self.include.split(",") if value.strip()]
         invalid = [value for value in values if value not in allowed]
         if invalid:

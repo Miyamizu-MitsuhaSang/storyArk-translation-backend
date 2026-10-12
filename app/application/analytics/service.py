@@ -14,6 +14,7 @@ from ...core.config import app_settings
 from ...models import AIProviderCredential, AIUsageRecord, ProjectMember, User
 from ...repositories.usage import AIUsageRepository
 from ...infrastructure.analytics.cache import NoopAnalyticsCache, RedisAnalyticsCache, build_usage_cache_key
+from ...infrastructure.ai_provider.pricing import TEST_PRICING_VERSION, calculate_token_cost
 from .schemas import (
     TranslationReportResponse,
     UsageAnalyticsQuery,
@@ -51,7 +52,7 @@ class UsageEvent:
     cached_input_tokens: int = 0
     reasoning_tokens: int = 0
     total_tokens: int = 0
-    cost: Decimal = Decimal("0")
+    cost: Decimal | None = None
     currency: str = "USD"
     completed_at: datetime | None = None
     started_at: datetime | None = None
@@ -63,7 +64,7 @@ class UsageEvent:
             raise ValueError("status 无效")
         if any(value < 0 for value in (self.input_tokens, self.output_tokens, self.cached_input_tokens, self.reasoning_tokens, self.total_tokens)):
             raise ValueError("token 数不能为负数")
-        if self.cost < 0:
+        if self.cost is not None and self.cost < 0:
             raise ValueError("cost 不能为负数")
         if self.completed_at is not None and self.completed_at.tzinfo is None:
             raise ValueError("completed_at 必须包含时区")
@@ -83,6 +84,18 @@ class UsageAnalyticsService:
 
     async def record(self, event: UsageEvent) -> AIUsageRecord:
         completed = event.completed_at or datetime.now(timezone.utc)
+        cost = event.cost
+        pricing_version = None
+        if cost is None:
+            cost = calculate_token_cost(
+                event.provider,
+                event.model,
+                input_tokens=event.input_tokens,
+                output_tokens=event.output_tokens,
+                cached_input_tokens=event.cached_input_tokens,
+                reasoning_tokens=event.reasoning_tokens,
+            )
+            pricing_version = TEST_PRICING_VERSION
         values = {
             "user_id": event.user_id,
             "project_id": event.project_id,
@@ -96,7 +109,8 @@ class UsageAnalyticsService:
             "cached_input_tokens": event.cached_input_tokens,
             "reasoning_tokens": event.reasoning_tokens,
             "total_tokens": event.total_tokens,
-            "cost": event.cost,
+            "cost": cost,
+            "pricing_version": pricing_version,
             "currency": event.currency,
             "started_at": event.started_at,
             "completed_at": completed,

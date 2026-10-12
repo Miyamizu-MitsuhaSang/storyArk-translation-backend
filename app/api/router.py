@@ -7,6 +7,7 @@ from .modules.project.routes import project_router
 from .modules.rag.routes import router as rag_router
 from .modules.jobs.routes import jobs_router
 from .modules.project.translation_settings.routes import translation_settings_router
+from .modules.project.settings.routes import project_settings_router
 from .modules.analytics.routes import analytics_router
 from ..core.config import app_settings
 
@@ -17,6 +18,7 @@ api_router.include_router(rag_router)
 api_router.include_router(project_router)
 api_router.include_router(jobs_router)
 api_router.include_router(translation_settings_router)
+api_router.include_router(project_settings_router)
 api_router.include_router(analytics_router)
 
 __all__ = ["api_router"]

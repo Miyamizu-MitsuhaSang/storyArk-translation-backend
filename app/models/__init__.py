@@ -3,6 +3,7 @@ from .ai_provider_credential import AIProviderCredential
 from .ai_usage import AIUsageRecord
 from .audit import IdempotencyRecord, ProjectAuditEvent
 from .auth import RefreshToken, User
+from .user_settings import AppearanceSettings, UserPreferences
 from .jobs import BackgroundJob
 from .document import Document, DocumentSegment, SegmentLock, SegmentSuggestion
 from .project import (
@@ -17,6 +18,8 @@ from .project import (
     TerminologyTerm,
     TerminologyTermRevision,
 )
+from .project_settings import ProjectSettings
+from .project_invitations import ProjectInvitation, ProjectInviteCode
 from .translation_memory import (
     TranslationMemoryEntry,
     TranslationMemoryEntryRevision,
@@ -41,11 +44,16 @@ __all__ = [
     "SegmentSuggestion",
     "TimestampedModel",
     "Project",
+    "ProjectSettings",
+    "ProjectInvitation",
+    "ProjectInviteCode",
     "ProjectApiKeyBinding",
     "ProjectLanguagePair",
     "ProjectMember",
     "RefreshToken",
     "User",
+    "AppearanceSettings",
+    "UserPreferences",
     "Worldview",
     "WorldviewEntry",
     "WorldviewEntryRevision",

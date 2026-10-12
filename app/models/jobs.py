@@ -81,7 +81,7 @@ class BackgroundJob(TimestampedModel):
                     job.worker_id = None
                     job.lease_expires_at = None
                     job.error_code = job.error_code or "RETRY_LIMIT_EXCEEDED"
-                    job.error_message = job.error_message or "任务已达到最大重试次数"
+                    job.error_message = _safe_error_message(job.error_message or "任务已达到最大重试次数")
                     await job.save(
                         using_db=connection,
                         update_fields=["status", "finished_at", "worker_id", "lease_expires_at", "error_code", "error_message"],

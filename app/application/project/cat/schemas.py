@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 SegmentSaveMode = Literal["draft", "translated"]
-SuggestionSource = Literal["tm", "terminology", "worldview", "rag", "llm"]
+SuggestionSource = Literal["translation_memory", "terminology", "worldview", "rag", "llm"]
 QACheck = Literal["placeholders", "numbers", "tags", "terminology", "length", "style"]
 BulkAction = Literal["submit_review", "qa", "approve", "reject", "confirm"]
 
@@ -76,7 +76,7 @@ class SegmentDetailResponse(BaseModel):
 
 
 class SuggestionRequest(BaseModel):
-    providers: list[SuggestionSource] = Field(default_factory=lambda: ["tm", "terminology", "worldview"], description="建议来源。")
+    providers: list[SuggestionSource] = Field(default_factory=lambda: ["translation_memory", "terminology", "worldview"], description="建议来源。")
     include_explanation: bool = Field(default=False, description="是否返回证据说明。")
     temperature: float = Field(default=0.2, ge=0, le=2, description="预留的生成温度；本版本不调用外部 provider。")
     lock_token: str | None = Field(default=None, max_length=128, description="可选的当前编辑锁令牌。")

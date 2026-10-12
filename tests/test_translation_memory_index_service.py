@@ -20,7 +20,7 @@ def test_index_backend_partitions_by_language_pair_and_round_trips():
         await Tortoise.init(db_url="sqlite://:memory:", modules={"models": ["translation_backend.app.models"]})
         await Tortoise.generate_schemas()
         try:
-            user = await User.create(username="tm-index", email="tm-index@example.com", password_hash="x", display_name="TM")
+            user = await User.create(username="translation_memory-index", email="translation_memory-index@example.com", password_hash="x", display_name="TM")
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM")
             rows = []
             for source_language, target_language, source, target in (
@@ -61,7 +61,7 @@ def test_index_service_publishes_only_when_library_version_is_current(tmp_path):
         await Tortoise.init(db_url="sqlite://:memory:", modules={"models": ["translation_backend.app.models"]})
         await Tortoise.generate_schemas()
         try:
-            user = await User.create(username="tm-build", email="tm-build@example.com", password_hash="x", display_name="TM")
+            user = await User.create(username="translation_memory-build", email="translation_memory-build@example.com", password_hash="x", display_name="TM")
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM")
             entry = await TranslationMemoryEntry.create(
                 library=library,
@@ -105,7 +105,7 @@ def test_index_service_refuses_to_publish_artifact_for_stale_version(tmp_path):
         await Tortoise.init(db_url="sqlite://:memory:", modules={"models": ["translation_backend.app.models"]})
         await Tortoise.generate_schemas()
         try:
-            user = await User.create(username="tm-stale", email="tm-stale@example.com", password_hash="x", display_name="TM")
+            user = await User.create(username="translation_memory-stale", email="translation_memory-stale@example.com", password_hash="x", display_name="TM")
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM")
             artifact = await model_module.TranslationMemoryIndexArtifact.create(
                 library=library,

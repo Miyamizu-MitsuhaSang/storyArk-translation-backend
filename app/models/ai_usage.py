@@ -50,6 +50,11 @@ class AIUsageRecord(TimestampedModel):
         default=0,
         description="本次调用成本，使用定点十进制金额，不能为负数。",
     )
+    pricing_version = fields.CharField(
+        max_length=64,
+        null=True,
+        description="计算该条成本所使用的价格表版本；历史手工成本可为空。",
+    )
     currency = fields.CharField(max_length=3, default="USD", description="成本货币 ISO 4217 代码。")
     started_at = fields.DatetimeField(null=True, description="调用开始时间，使用 UTC。")
     completed_at = fields.DatetimeField(description="调用完成或失败时间，使用 UTC。")

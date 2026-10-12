@@ -25,11 +25,11 @@ celery_app.conf.update(
     timezone=celery_settings.timezone,
     enable_utc=celery_settings.enable_utc,
     beat_schedule={
-        "reclaim-expired-tm-index-jobs": {
+        "reclaim-expired-translation_memory-index-jobs": {
             "task": "translation_memory.reclaim_expired_index_jobs",
             "schedule": 60.0,
         },
-        "cleanup-superseded-tm-index-artifacts": {
+        "cleanup-superseded-translation_memory-index-artifacts": {
             "task": "translation_memory.cleanup_superseded_artifacts",
             "schedule": 3600.0,
         },

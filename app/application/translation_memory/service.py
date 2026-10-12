@@ -74,6 +74,11 @@ class TranslationMemoryCursorError(TranslationMemoryError):
     code = "TRANSLATION_MEMORY_INVALID_CURSOR"
 
 
+class TranslationMemoryQueryTooLongError(TranslationMemoryError):
+    status_code = 422
+    code = "TRANSLATION_MEMORY_QUERY_TOO_LONG"
+
+
 class TranslationMemoryIndexUnavailableError(TranslationMemoryError):
     status_code = 503
     code = "INDEX_NOT_AVAILABLE"
@@ -124,7 +129,7 @@ class TranslationMemoryService:
 
     async def search(self, user: User, project_id: UUID, request: TranslationMemorySearchRequest) -> TranslationMemorySearchResponse:
         if len(request.source_text) > app_settings.tm_search_max_text_length:
-            raise TranslationMemoryCursorError("查询文本超过长度限制")
+            raise TranslationMemoryQueryTooLongError("查询文本超过长度限制")
         started_at = perf_counter()
         await self._ensure_project_member(user, project_id)
         scope = await build_effective_scope(user.id)

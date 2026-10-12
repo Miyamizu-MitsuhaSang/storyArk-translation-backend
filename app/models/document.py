@@ -256,7 +256,7 @@ class SegmentSuggestion(TimestampedModel):
         on_delete=fields.CASCADE,
         description="建议所属片段；片段删除时一并删除建议。",
     )
-    source = fields.CharField(max_length=32, description="建议来源，如 tm、terminology 或 worldview。")
+    source = fields.CharField(max_length=32, description="建议来源，如 translation_memory、terminology 或 worldview。")
     text = fields.TextField(description="建议译文文本。")
     score = fields.FloatField(default=0, description="建议排序分数。")
     evidence: list[dict[str, Any]] = fields.JSONField(default=list, description="建议证据引用。")

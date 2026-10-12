@@ -58,7 +58,7 @@ class LocalIndexArtifactStore:
         storage_uri = f"sha256/{checksum}"
         destination = self._path_for(storage_uri)
         self._content_root.mkdir(parents=True, exist_ok=True)
-        descriptor, temporary_name = tempfile.mkstemp(prefix=".tm-index-", dir=self._content_root)
+        descriptor, temporary_name = tempfile.mkstemp(prefix=".translation_memory-index-", dir=self._content_root)
         temporary = Path(temporary_name)
         try:
             with os.fdopen(descriptor, "wb") as artifact:

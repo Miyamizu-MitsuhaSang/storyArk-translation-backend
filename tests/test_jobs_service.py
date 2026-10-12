@@ -105,3 +105,57 @@ def test_terminal_job_cannot_be_cancelled() -> None:
             await JobsService().cancel(user, job.id)
 
     run_db_test(scenario)
+
+
+def test_job_errors_expose_stable_codes() -> None:
+    async def scenario():
+        user, project = await make_project_user()
+        job = await BackgroundJob.create(
+            type="cat_bulk_action",
+            resource_type="project",
+            resource_id=project.id,
+            requested_version=1,
+            status="succeeded",
+        )
+        try:
+            await JobsService().cancel(user, job.id)
+        except JobConflictError as exc:
+            assert exc.code == "JOB_NOT_CANCELLABLE"
+        else:
+            raise AssertionError("expected JobConflictError")
+
+    run_db_test(scenario)
+
+
+def test_invalid_job_cursor_has_stable_code() -> None:
+    async def scenario():
+        user, _ = await make_project_user()
+        try:
+            from translation_backend.app.application.jobs.schemas import JobListQuery
+
+            await JobsService().list(user, JobListQuery(cursor="invalid"))
+        except JobConflictError as exc:
+            assert exc.code == "JOB_CURSOR_INVALID"
+        else:
+            raise AssertionError("expected JobConflictError")
+
+    run_db_test(scenario)
+
+
+def test_malformed_structured_job_cursor_has_stable_code() -> None:
+    async def scenario():
+        user, _ = await make_project_user()
+        from translation_backend.app.application.jobs.schemas import JobListQuery
+
+        import base64
+        import json
+
+        cursor = base64.urlsafe_b64encode(json.dumps({"priority": "bad"}).encode()).decode().rstrip("=")
+        try:
+            await JobsService().list(user, JobListQuery(cursor=cursor))
+        except JobConflictError as exc:
+            assert exc.code == "JOB_CURSOR_INVALID"
+        else:
+            raise AssertionError("expected JobConflictError")
+
+    run_db_test(scenario)

@@ -80,7 +80,7 @@ class TranslationMemorySearchRequest(BaseModel):
     source_text: str = Field(min_length=1, max_length=16384)
     source_language: str = Field(min_length=1, max_length=16)
     target_language: str = Field(min_length=1, max_length=16)
-    top_k: int = Field(default=20, ge=1, le=50)
+    top_k: int = Field(default=20, ge=1, le=20)
     min_score: float = Field(default=0.0, ge=0.0, le=1.0)
     match_mode: Literal["exact", "fuzzy"] = "exact"
     include_library_ids: list[UUID] | None = None

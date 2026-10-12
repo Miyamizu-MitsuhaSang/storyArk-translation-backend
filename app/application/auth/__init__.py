@@ -5,6 +5,7 @@ from .schemas import (
     ErrorResponse,
     LoginRequest,
     MeResponse,
+    ProfileUpdateRequest,
     RefreshRequest,
     TokenResponse,
 )
@@ -17,6 +18,7 @@ __all__ = [
     "ErrorResponse",
     "LoginRequest",
     "MeResponse",
+    "ProfileUpdateRequest",
     "RefreshRequest",
     "TokenResponse",
 ]

@@ -80,7 +80,7 @@ def test_app_settings_prefers_rag_candidate_threshold_name(tmp_path: Path) -> No
 def test_app_settings_configures_translation_memory_index_storage(tmp_path: Path) -> None:
     env_file = tmp_path / ".env.app"
     env_file.write_text(
-        "TM_INDEX_STORAGE_DIR=/var/lib/translation-platform/tm-indexes\n"
+        "TM_INDEX_STORAGE_DIR=/var/lib/translation-platform/translation_memory-indexes\n"
         "TM_INDEX_MAX_ARTIFACT_BYTES=2097152\n"
         "TM_INDEX_RETENTION_COUNT=7\n",
         encoding="utf-8",
@@ -88,7 +88,7 @@ def test_app_settings_configures_translation_memory_index_storage(tmp_path: Path
 
     settings = AppSettings(_env_file=env_file)
 
-    assert settings.tm_index_storage_dir == Path("/var/lib/translation-platform/tm-indexes")
+    assert settings.tm_index_storage_dir == Path("/var/lib/translation-platform/translation_memory-indexes")
     assert settings.tm_index_max_artifact_bytes == 2097152
     assert settings.tm_index_retention_count == 7
 

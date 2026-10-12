@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header
 from starlette.responses import JSONResponse
 
 from ......application.project.cat.schemas import (
@@ -106,10 +106,11 @@ async def unconfirm_segment(
 async def bulk_segment_action(
     project_id: UUID,
     request: BulkActionRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", description="批量异步操作的幂等键。"),
     user: User = Depends(get_current_user),
     service: CatWorkflowService = Depends(get_cat_workflow_service),
 ) -> BulkActionResponse | JSONResponse:
-    result = await service.bulk_action(user, project_id, request)
+    result = await service.bulk_action(user, project_id, request, idempotency_key=idempotency_key)
     if result.job_id is not None:
         return JSONResponse(status_code=202, content=result.model_dump(mode="json"))
     return result

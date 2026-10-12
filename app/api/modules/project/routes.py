@@ -10,6 +10,7 @@ from .version.routes import project_version_router
 from .translation_task.routes import translation_task_router
 from .audit_routes import project_audit_router
 from .cat.router import project_cat_router
+from .member_invitations import project_member_invitation_router
 from ...shared.dependencies import get_current_user
 from .dependencies import get_project_service
 from ....application.project.schemas import (
@@ -36,6 +37,7 @@ project_router.include_router(project_document_router, prefix="/{project_id}/doc
 project_router.include_router(project_version_router, prefix="/{project_id}/versions", tags=["versions"])
 project_router.include_router(translation_task_router, prefix="/{project_id}/translation-tasks", tags=["translation-tasks"])
 project_router.include_router(project_cat_router, prefix="/{project_id}", tags=["cat"])
+project_router.include_router(project_member_invitation_router, tags=["project-member-invitations"])
 project_router.include_router(project_content_router, prefix="/{project_id}", tags=["content"])
 project_router.include_router(project_audit_router, tags=["audit"])
 

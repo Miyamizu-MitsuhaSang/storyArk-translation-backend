@@ -5,6 +5,15 @@ from typing import Any
 from uuid import UUID
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderCapabilities:
+    """Capabilities exposed by an adapter without leaking vendor SDK types."""
+
+    supports_usage: bool = True
+    supports_streaming: bool = False
+    supports_context: bool = True
+
+
 def _validate_context(value: dict[str, Any]) -> dict[str, Any]:
     blocked = {"api_key", "apikey", "secret", "token", "password", "credential"}
     if any(str(key).casefold() in blocked for key in value):
@@ -72,4 +81,4 @@ class TranslationResult:
     warnings: tuple[str, ...] = ()
 
 
-__all__ = ["TranslationRequest", "TranslationResult", "UsageSnapshot"]
+__all__ = ["ProviderCapabilities", "TranslationRequest", "TranslationResult", "UsageSnapshot"]

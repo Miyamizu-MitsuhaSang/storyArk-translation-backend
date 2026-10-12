@@ -6,8 +6,10 @@ from ....application.auth.schemas import (
     ErrorResponse,
     LoginRequest,
     MeResponse,
+    ProfileUpdateRequest,
     RefreshRequest,
     TokenResponse,
+    UserResponse,
 )
 from ....application.auth.service import AuthError, AuthService
 from ...shared.dependencies import (
@@ -75,6 +77,24 @@ async def me(
     return await service.me(user)
 
 
+@auth_router.get("/me/profile", response_model=UserResponse, responses={401: {"model": ErrorResponse}})
+async def profile(user: User = Depends(get_current_user)) -> UserResponse:
+    return UserResponse.model_validate(user)
+
+
+@auth_router.patch(
+    "/me/profile",
+    response_model=UserResponse,
+    responses={401: {"model": ErrorResponse}, 422: {"model": ErrorResponse}},
+)
+async def update_profile(
+    request: ProfileUpdateRequest,
+    user: User = Depends(get_current_user),
+    service: AuthService = Depends(get_auth_service),
+) -> UserResponse:
+    return await service.update_profile(user, request)
+
+
 @auth_router.patch(
     "/me/password",
     status_code=204,
@@ -91,6 +111,10 @@ async def change_password(
 
 from .api_key.routes import user_api_router
 from .translation_memory.routes import user_translation_memory_router
+from .settings.routes import user_settings_router
+from ..project.member_invitations.routes import user_project_invitation_router
 
 auth_router.include_router(user_api_router)
 auth_router.include_router(user_translation_memory_router)
+auth_router.include_router(user_settings_router)
+auth_router.include_router(user_project_invitation_router)

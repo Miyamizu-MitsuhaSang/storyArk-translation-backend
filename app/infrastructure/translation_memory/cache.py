@@ -26,7 +26,7 @@ class NoopTranslationMemoryCache(TranslationMemoryCache):
 
 
 class RedisTranslationMemoryCache:
-    def __init__(self, client: Any, *, namespace: str = "tm") -> None:
+    def __init__(self, client: Any, *, namespace: str = "translation_memory") -> None:
         self.client = client
         self.namespace = namespace
 
@@ -55,7 +55,7 @@ class RedisTranslationMemoryCache:
         return key if key.startswith(f"{self.namespace}:") else f"{self.namespace}:{key}"
 
 
-def build_search_cache_key(request: TranslationMemorySearchRequest, *, user_id: UUID, project_id: UUID, library_versions: Mapping[UUID, int] | None = None, namespace: str = "tm") -> str:
+def build_search_cache_key(request: TranslationMemorySearchRequest, *, user_id: UUID, project_id: UUID, library_versions: Mapping[UUID, int] | None = None, namespace: str = "translation_memory") -> str:
     versions = library_versions or {}
     libraries = sorted((str(library_id), int(version)) for library_id, version in versions.items())
     filters = {

@@ -14,5 +14,6 @@ models/semantic/
 
 # Runtime logs and local environment files (may contain secrets)
 logs/
+var/
 env/.env.*
 !.env.example

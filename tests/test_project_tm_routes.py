@@ -27,10 +27,16 @@ def test_project_tm_module_defines_all_project_tm_operations():
     )
 
 
-def test_project_translation_memory_module_is_removed():
+def test_legacy_project_translation_memory_module_is_removed():
     assert importlib.util.find_spec(
         "translation_backend.app.api.modules.project.project_content.translation_memory"
     ) is None
+
+
+def test_project_tm_module_is_canonical():
+    assert importlib.util.find_spec(
+        "translation_backend.app.api.modules.project.project_content.tm"
+    ) is not None
 
 
 def test_api_service_compatibility_modules_are_removed():

@@ -74,7 +74,7 @@ class ContextService:
                 ),
             )
             terms = [item.model_dump(mode="json") for item in term_results.items]
-        if "tm" in sources and segment is not None:
+        if "translation_memory" in sources and segment is not None:
             tm_result = await self._translation_memory.search(
                 user,
                 project_id,

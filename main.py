@@ -11,8 +11,10 @@ try:
     from .app.api.modules.project.routes import register_project_exception_handler
     from .app.api.modules.project.document.routes import register_document_exception_handler
     from .app.api.modules.project.translation_settings.routes import register_translation_settings_exception_handler
+    from .app.api.modules.project.settings.routes import register_project_settings_exception_handler
     from .app.api.modules.project.translation_task.routes import register_translation_task_exception_handler
     from .app.api.modules.analytics.routes import register_analytics_exception_handler
+    from .app.api.modules.jobs.routes import register_jobs_exception_handler
     from .app.api.shared.errors import register_shared_exception_handlers
     from .app.api.router import api_router
     from .app.core.config import app_settings
@@ -26,8 +28,10 @@ except ImportError:
     from app.api.modules.project.routes import register_project_exception_handler
     from app.api.modules.project.document.routes import register_document_exception_handler
     from app.api.modules.project.translation_settings.routes import register_translation_settings_exception_handler
+    from app.api.modules.project.settings.routes import register_project_settings_exception_handler
     from app.api.modules.project.translation_task.routes import register_translation_task_exception_handler
     from app.api.modules.analytics.routes import register_analytics_exception_handler
+    from app.api.modules.jobs.routes import register_jobs_exception_handler
     from app.api.shared.errors import register_shared_exception_handlers
     from app.api.router import api_router
     from app.core.config import app_settings
@@ -88,9 +92,11 @@ register_api_key_exception_handler(app)
 register_project_exception_handler(app)
 register_document_exception_handler(app)
 register_shared_exception_handlers(app)
+register_jobs_exception_handler(app)
 register_translation_settings_exception_handler(app)
+register_project_settings_exception_handler(app)
 register_translation_task_exception_handler(app)
 register_analytics_exception_handler(app)
 
 if __name__ == '__main__':
-    uvicorn.run(app, host="127.0.0.1", port=8000, workers=2, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, workers=2, reload=False)

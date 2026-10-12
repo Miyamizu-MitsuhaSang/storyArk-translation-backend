@@ -8,6 +8,7 @@ from ...domain.ai_translation.errors import AiTranslationError, ProviderCallErro
 from ...models import AIProviderCredential, ProjectMember, User
 from ...repositories.usage import AIUsageRepository
 from ...infrastructure.ai_provider.registry import ModelInvokerRegistry
+from ...infrastructure.ai_provider.pricing import TEST_PRICING_VERSION, calculate_token_cost
 from ..auth.api_key.service import ApiKeyService
 
 
@@ -35,6 +36,7 @@ class AiTranslationService:
         credential = await AIProviderCredential.filter(id=api_key_id, user_id=user.id, is_active=True).first()
         if credential is None:
             raise AiTranslationError("API key 不存在或不可用", code="API_KEY_NOT_FOUND")
+        self._registry.validate_model(request.model_type, request.model)
         expected_provider = self._registry.provider_for(request.model_type)
         if expected_provider != credential.provider:
             raise ProviderMismatchError("API key provider 与 model_type 不匹配", code="PROVIDER_MISMATCH")
@@ -45,7 +47,16 @@ class AiTranslationService:
             result = await invoker.translate(request, api_key=secret)
         except Exception as exc:
             completed = datetime.now(timezone.utc)
-            await self._record_usage(user, project_id, credential, request, status="failed", started=started, completed=completed, error_code="PROVIDER_CALL_FAILED")
+            await self._record_usage(
+                user,
+                project_id,
+                credential,
+                request,
+                status="failed",
+                started=started,
+                completed=completed,
+                error_code=getattr(exc, "code", "PROVIDER_CALL_FAILED"),
+            )
             if isinstance(exc, AiTranslationError):
                 raise
             raise ProviderCallError("翻译 provider 调用失败", code="PROVIDER_CALL_FAILED") from None
@@ -55,6 +66,11 @@ class AiTranslationService:
 
     async def _record_usage(self, user, project_id, credential, request, *, status, started, completed, result=None, error_code=None):
         usage = result.usage if result is not None else None
+        input_tokens = usage.input_tokens if usage else 0
+        output_tokens = usage.output_tokens if usage else 0
+        cached_input_tokens = usage.cached_input_tokens if usage else 0
+        reasoning_tokens = usage.reasoning_tokens if usage else 0
+        total_tokens = usage.total_tokens if usage else 0
         await self._usage.create(
             user_id=user.id,
             project_id=project_id,
@@ -63,11 +79,20 @@ class AiTranslationService:
             model=request.model,
             provider_request_id=result.provider_request_id if result is not None else None,
             status=status,
-            input_tokens=usage.input_tokens if usage else 0,
-            output_tokens=usage.output_tokens if usage else 0,
-            cached_input_tokens=usage.cached_input_tokens if usage else 0,
-            reasoning_tokens=usage.reasoning_tokens if usage else 0,
-            total_tokens=usage.total_tokens if usage else 0,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cached_input_tokens=cached_input_tokens,
+            reasoning_tokens=reasoning_tokens,
+            total_tokens=total_tokens,
+            cost=calculate_token_cost(
+                credential.provider,
+                request.model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cached_input_tokens=cached_input_tokens,
+                reasoning_tokens=reasoning_tokens,
+            ),
+            pricing_version=TEST_PRICING_VERSION,
             started_at=started,
             completed_at=completed,
             latency_ms=max(0, int((completed - started).total_seconds() * 1000)),

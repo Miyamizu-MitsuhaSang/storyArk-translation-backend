@@ -247,11 +247,36 @@ Request:
 
 返回当前用户和可访问项目摘要。
 
+### GET/PATCH `/auth/me/profile`
+
+读取或更新当前登录用户的个人资料。`GET` 返回用户 ID、用户名、邮箱和显示名称；`PATCH` 目前只允许修改 `display_name`。用户名和邮箱是账户身份字段，不能通过此接口修改。
+
+请求示例：
+
+```json
+{
+  "display_name": "新的显示名称"
+}
+```
+
+成功返回更新后的用户资料：
+
+```json
+{
+  "id": "user-123",
+  "username": "mika",
+  "email": "mika@example.com",
+  "display_name": "新的显示名称"
+}
+```
+
+显示名称会去除首尾空白，不能为空，长度限制为 1 至 120 个字符。未登录返回 `401`；字段格式错误、空白显示名称或提交不可修改字段返回 `422`。
+
 ### GET `/auth/me/settings`
 
-读取当前登录用户的账户设置。该接口只返回用户级设置，不包含项目翻译设置；其中 `preferences.locale` 只表示网站界面语言，不表示翻译任务的源语言或目标语言。
+读取当前登录用户的账户设置。该接口只返回用户级设置，不包含项目翻译设置；其中 `preferences.locale` 只表示网站界面语言，不表示翻译任务的源语言或目标语言，`preferences.allow_member_search` 控制当前用户是否出现在项目成员候选搜索结果中。
 
-如果用户尚未保存设置，服务端使用默认值返回并创建对应记录：`appearance.theme` 默认为 `system`，`preferences.locale` 默认为 `zh-CN`。设置按用户隔离，客户端不能通过查询参数或请求体指定其他用户。
+如果用户尚未保存设置，服务端使用默认值返回并创建对应记录：`appearance.theme` 默认为 `system`，`preferences.locale` 默认为 `zh-CN`，`preferences.allow_member_search` 默认为 `false`。设置按用户隔离，客户端不能通过查询参数或请求体指定其他用户。
 
 成功返回 `200`：
 
@@ -264,6 +289,7 @@ Request:
   },
   "preferences": {
     "locale": "zh-CN",
+    "allow_member_search": false,
     "revision": 1,
     "updated_at": "2026-10-09T00:00:00Z"
   }
@@ -278,6 +304,7 @@ Request:
 | `appearance.revision` | `integer` | 外观设置版本，用于并发更新控制。 |
 | `appearance.updated_at` | ISO 8601 时间 | 外观设置最近更新时间。 |
 | `preferences.locale` | `string` | 网站界面语言代码，例如 `zh-CN`、`en-US`；不影响项目语言方向。 |
+| `preferences.allow_member_search` | `boolean` | 是否允许项目管理员通过用户名、邮箱或显示名称搜索到当前用户；默认 `false`。关闭后不会出现在候选搜索结果中，但不影响已收到的定向邀请或已登录后的邀请码兑换；兑换后仍须由用户明确接受邀请。 |
 | `preferences.revision` | `integer` | 用户偏好版本，用于并发更新控制。 |
 | `preferences.updated_at` | ISO 8601 时间 | 用户偏好最近更新时间。 |
 
@@ -295,6 +322,7 @@ Request:
   },
   "preferences": {
     "locale": "en-US",
+    "allow_member_search": true,
     "revision": 1
   }
 }
@@ -307,13 +335,14 @@ Request:
 | `appearance.theme` | `string` | 否 | 允许值为 `light`、`dark`、`system`。 |
 | `appearance.revision` | `integer` | 否 | 提交时的外观版本；与服务端不一致返回 `409 SETTINGS_REVISION_CONFLICT`。 |
 | `preferences.locale` | `string` | 否 | 已支持的界面语言代码；不支持的语言返回 `422 UNSUPPORTED_LOCALE`。 |
+| `preferences.allow_member_search` | `boolean` | 否 | 是否允许被项目管理员通过用户名、邮箱或显示名称搜索；默认 `false`。关闭后不出现在项目成员候选搜索结果中，但不影响定向邀请接受或登录后的邀请码兑换。 |
 | `preferences.revision` | `integer` | 否 | 提交时的用户偏好版本；与服务端不一致返回 `409 SETTINGS_REVISION_CONFLICT`。 |
 
 空对象表示无变更，服务端仍返回当前完整 settings 对象。成功返回更新后的完整 settings 对象，状态码为 `200`。未登录返回 `401`；字段格式错误返回 `422`；当前用户以外的设置不可见。
 
 用户设置的扩展必须在所属作用域内增加有类型的字段，并同步数据库迁移、schema 校验、服务层、OpenAPI description、API 文档和测试。不要将外观、用户偏好和项目业务配置混入同一张无约束 JSON settings 表。项目级翻译设置继续使用项目路由和项目成员权限，不通过本接口修改。
 
-前端实现约定：登录或恢复会话后读取本接口；`theme=system` 时监听系统主题变化，显式 `light`/`dark` 覆盖系统主题；修改设置后调用 PATCH。`locale` 只切换网站界面文案。浏览器本地缓存只能作为启动优化，服务端响应是跨设备同步的事实来源；客户端应忽略未知未来字段，以兼容后续扩展。
+前端实现约定：登录或恢复会话后读取本接口；`theme=system` 时监听系统主题变化，显式 `light`/`dark` 覆盖系统主题；修改设置后调用 PATCH 并以服务端完整响应更新本地状态。`locale` 只切换网站界面文案。`allow_member_search=false` 时，用户不会出现在项目成员候选搜索结果中，服务端不返回其“不可搜索”的原因以避免用户枚举，但仍可以接受定向邀请或兑换已获得的邀请码；邀请码兑换只产生待确认邀请，不会自动加入项目。浏览器本地缓存只能作为启动优化，服务端响应是跨设备同步的事实来源；客户端应忽略未知未来字段，以兼容后续扩展。
 
 ### PATCH `/auth/me/password`
 
@@ -400,6 +429,27 @@ GET 返回单个 key 的脱敏元数据。PATCH 只允许修改 `{label,status}`
 
 获取项目成员，支持按角色和关键词筛选。
 
+### GET `/projects/{project_id}/member-candidates`
+
+供 `owner` 或 `manager` 搜索可邀请的已注册用户。查询参数 `q` 至少 2 个字符，可匹配用户名、邮箱或显示名称；只返回账号处于 active 状态且用户设置 `preferences.allow_member_search=true` 的用户摘要，不返回密钥、手机号或其他隐私字段。关闭被搜索的用户不会出现在结果中，服务端不返回其“不可搜索”的原因，以避免用户枚举。
+
+成功 `200` 返回：
+
+```json
+{
+  "items": [
+    {
+      "id": "user-456",
+      "username": "alice",
+      "display_name": "Alice",
+      "email_masked": "a***@example.com"
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+```
+
 ### POST `/projects/{project_id}/members`
 
 ```json
@@ -408,6 +458,84 @@ GET 返回单个 key 的脱敏元数据。PATCH 只允许修改 `{label,status}`
   "role": "translator"
 }
 ```
+
+该接口保留为已知 `user_id` 的兼容性写入接口。新前端流程不直接调用它，而是创建邀请并等待目标用户接受。
+
+### POST `/projects/{project_id}/invitations`
+
+向一个已注册用户发送定向项目邀请，仅 `owner` 或 `manager` 可用。请求必须提供 `user_id` 和 `role`；目标用户必须处于 active 状态。邀请创建后不会立即写入 `project_members`。
+
+```json
+{
+  "user_id": "user-456",
+  "role": "translator",
+  "expires_in": 259200
+}
+```
+
+`expires_in` 范围为 3600 至 604800 秒，默认 72 小时。相同项目、相同用户已有有效邀请时返回原邀请或 `409 PROJECT_INVITATION_EXISTS`，已是项目成员时返回 `409 PROJECT_MEMBER_EXISTS`。成功返回 `201` 和 `status=pending` 的邀请摘要。
+
+### GET `/projects/{project_id}/invitations`
+
+查询项目发出的邀请，支持 `status=pending|accepted|declined|revoked|expired`、`page_size` 和不透明 `cursor`。仅 `owner` 或 `manager` 可查看；响应不得包含邀请码明文或用户隐私设置。
+
+### DELETE `/projects/{project_id}/invitations/{invitation_id}`
+
+撤销尚未处理的定向邀请。撤销后邀请不能再接受，重复撤销返回幂等成功或 `409 PROJECT_INVITATION_CONFLICT`。
+
+### POST `/projects/{project_id}/invite-codes`
+
+为项目生成面向已注册用户的邀请码，仅 `owner` 或 `manager` 可用。邀请码绑定创建者预设的角色，不允许兑换者在请求中修改角色；默认有效期 72 小时、最多使用 1 次。成功 `201` 只在创建响应中返回一次邀请码明文，后续查询只返回脱敏摘要。邀请码兑换者仍需明确接受生成的待确认邀请，不能因为兑换成功直接加入项目。
+
+```json
+{
+  "role": "reviewer",
+  "expires_in": 259200,
+  "max_uses": 1
+}
+```
+
+### GET `/projects/{project_id}/invite-codes`
+
+查询项目邀请码摘要，包括状态、角色、有效期、使用次数和创建时间；不得返回邀请码明文。
+
+### DELETE `/projects/{project_id}/invite-codes/{invite_code_id}`
+
+撤销尚未过期且仍可使用的邀请码。撤销后兑换统一返回 `404 PROJECT_INVITE_CODE_NOT_FOUND`。
+
+### GET `/auth/me/project-invitations`
+
+查询当前登录用户收到的定向项目邀请，支持 `status=pending|accepted|declined|expired` 和分页。只返回发给当前用户的邀请。
+
+### POST `/auth/me/project-invitations/{invitation_id}/accept`
+
+接受定向邀请。服务端在事务内校验邀请属于当前用户、未过期、未撤销、项目仍可用且当前用户尚未是成员，然后创建 `project_members` 记录并将邀请标记为 `accepted`。操作应支持 `Idempotency-Key`，重试返回同一成员结果。
+
+### POST `/auth/me/project-invitations/{invitation_id}/decline`
+
+拒绝当前用户收到的待处理邀请。拒绝不创建成员记录，之后不能再次接受同一邀请。
+
+### POST `/auth/me/project-invite-codes/redeem`
+
+已登录的已注册用户兑换项目邀请码。请求只提交邀请码明文；项目和角色均由服务端从邀请码记录解析，客户端不能传入或覆盖 `project_id`、`role` 或 `max_uses`。兑换只会生成一条发给当前用户的 `pending` 项目邀请，不会直接创建项目成员；用户还必须调用接受邀请接口明确同意。
+
+```json
+{
+  "code": "SA-7K4P-9M2Q"
+}
+```
+
+兑换成功在事务内创建待确认邀请并原子递增已领取次数；只有用户接受该邀请后才创建成员记录。用户拒绝、撤销或邀请过期时释放已领取名额。账号未登录、邀请码不存在、已过期、已撤销、达到使用上限、项目已归档或用户已经是成员时，分别返回稳定错误码 `401 AUTH_REQUIRED`、`404 PROJECT_INVITE_CODE_NOT_FOUND`、`409 PROJECT_INVITE_CODE_EXPIRED`、`409 PROJECT_INVITE_CODE_REVOKED`、`409 PROJECT_INVITE_CODE_EXHAUSTED`、`409 PROJECT_ARCHIVED` 或 `409 PROJECT_MEMBER_EXISTS`。邀请码不能创建账户，也不能绕过登录、项目权限或用户停用检查。
+
+### 成员添加流程
+
+1. 项目 `owner`/`manager` 在成员管理页选择“邀请成员”。
+2. 前端先调用 `member-candidates?q=...` 搜索已注册且允许被搜索的用户；搜索不到时不提示用户是否存在或关闭了搜索。
+3. 选择用户和角色后调用 `POST /projects/{project_id}/invitations`，目标用户保持 `pending`，此时不出现在成员列表。
+4. 如不使用定向搜索，可由项目管理员生成邀请码并通过受控渠道发送给已登录的团队成员；邀请码不能用于注册。
+5. 目标用户在“收到的项目邀请”中接受或拒绝定向邀请；邀请码用户先兑换生成待确认邀请，再在同一入口明确接受或拒绝。
+6. 只有接受事务成功后才创建 `project_members`，前端随后重新读取成员列表和项目摘要；单独兑换邀请码不会刷新为项目成员。
+7. 项目管理员可以查看、撤销待处理邀请和邀请码；所有邀请创建、接受、拒绝、兑换和撤销操作写入项目审计日志。
 
 ### PATCH `/projects/{project_id}/members/{user_id}`
 
@@ -586,24 +714,24 @@ TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平�
 | --- | --- | --- |
 | `GET` | `/auth/me/translation-memories` | 列出当前用户的 `user` 库，支持 `page_size` 和不透明 `cursor` |
 | `GET` | `/auth/me/translation-memories/{memory_id}` | 读取当前用户拥有的库 |
-| `PATCH` | `/auth/me/translation-memories/{memory_id}` | 更新名称、描述或 `active`/`archived` 状态 |
+| `PATCH` | `/auth/me/translation-memories/{memory_id}` | 携带 `Idempotency-Key` 更新名称、描述或 `active`/`archived` 状态 |
 | `GET` | `/auth/me/translation-memories/{memory_id}/entries` | 列出活动条目，支持 `page_size` 和 `cursor` |
-| `POST` | `/auth/me/translation-memories/{memory_id}/entries` | 创建条目，来源 `origin` 可为 `confirmed_segment`、`imported`、`machine_translated` 或 `manual` |
-| `PATCH` | `/auth/me/translation-memories/{memory_id}/entries/{entry_id}` | 携带 `expected_revision` 更新条目并保留修订历史 |
-| `DELETE` | `/auth/me/translation-memories/{memory_id}/entries/{entry_id}` | 携带 `expected_revision` 归档条目，不物理删除历史 |
+| `POST` | `/auth/me/translation-memories/{memory_id}/entries` | 携带 `Idempotency-Key` 创建条目，来源 `origin` 可为 `confirmed_segment`、`imported`、`machine_translated` 或 `manual` |
+| `PATCH` | `/auth/me/translation-memories/{memory_id}/entries/{entry_id}` | 携带 `Idempotency-Key` 和 `expected_revision` 更新条目并保留修订历史 |
+| `DELETE` | `/auth/me/translation-memories/{memory_id}/entries/{entry_id}` | 携带 `Idempotency-Key` 和 `expected_revision` 归档条目，不物理删除历史 |
 | `POST` | `/auth/me/translation-memories/{memory_id}/imports` | 使用 `Idempotency-Key` 批量导入条目；小批量同步返回结果，超过阈值返回 queued job |
 
 批量导入只允许写入当前用户的 active `user` 库。每个错误保留 1-based `row`、`code` 和 `message`；重复提交相同幂等键返回既有结果。`metadata` 仅允许受控业务字段，禁止 `prompt`、`completion`、`api_key`、`secret`、`token` 等敏感键，大小上限为 8192 字节。
 
-重复写请求应携带 `Idempotency-Key`。相同 key 重试必须返回同一业务结果；参数或版本不一致分别返回 `422` 或 `409 TRANSLATION_MEMORY_CONFLICT`。
+重复写请求应携带 `Idempotency-Key`。相同 key 重试必须返回同一业务结果；相同 key 复用不同请求参数返回 `409 IDEMPOTENCY_CONFLICT`，资源版本冲突返回 `409 TRANSLATION_MEMORY_CONFLICT`。
 
-幂等结果保存在 PostgreSQL 的 `api_idempotency_records` 表中。Redis 可选地用于同一请求的短时并发锁，不是结果事实来源；Redis 未启用或不可用时，服务端仍使用数据库唯一约束处理竞争并重放已保存结果。
+幂等结果保存在 PostgreSQL 的 `api_idempotency_records` 表中。TM 导入额外使用 `translation_memory_imports` 保存原始行、行级校验结果、导入计数和后台任务状态，但不替代通用幂等结果记录。Redis 可选地用于同一请求的短时并发锁，不是结果事实来源；Redis 未启用或不可用时，服务端仍使用数据库唯一约束处理竞争并重放已保存结果。
 
 ### 7.2 项目有效范围和检索
 
 `GET /projects/{project_id}/translation-memories` 返回当前用户在该项目可使用的 `platform` 库和自己的 `user` 库，并返回语言对、优先级、`content_version`、条目数和 `index_status`。项目成员关系是唯一有效范围来源，不能通过请求参数读取其他项目或其他用户的库。
 
-`POST /projects/{project_id}/tm/search` 当前支持精确检索：
+`POST /projects/{project_id}/tm/search` 当前支持 `exact` 和 `fuzzy` 检索：
 
 ```json
 {
@@ -617,7 +745,7 @@ TM 按 `scope` 隔离。`user` 库只属于当前用户；`platform` 库由平�
 }
 ```
 
-响应包含 `source_hash`、`index_status`、条目来源和 `score`。`match_mode` 预留 `fuzzy`、`semantic` 扩展；接入向量索引后仍必须先应用项目有效范围和语言对过滤，再执行模糊或语义召回。查询文本超过服务端上限返回 `422`，索引不可用返回 `503 INDEX_NOT_AVAILABLE`。
+响应包含 `source_hash`、`index_status`、条目来源和 `score`。`exact` 使用数据库和 source hash 精确匹配，不依赖持久索引；`fuzzy` 使用当前 active 的版本化索引 artifact，并在召回后再次执行权限、语言对、状态和时间范围过滤。索引缺失、过期、损坏或版本不兼容时返回 `503 INDEX_NOT_AVAILABLE`。`semantic` 仍作为后续扩展，当前不会被 schema 接受。`top_k` 取值范围为 `1..20`；查询文本超过服务端上限返回 `422 TRANSLATION_MEMORY_QUERY_TOO_LONG`。
 
 ### 7.3 confirmed segment 自动写入
 
@@ -913,6 +1041,12 @@ Response `200`：
 
 ## 11. Jobs and audit API
 
+`background_jobs` 是异步任务状态的唯一事实来源。Redis 只可用于幂等并发锁或查询缓存，不保存任务最终状态。任务结果和错误响应不得暴露 `secret`、`token`、`api_key`、`storage_key`、`storage_uri` 或本地文件路径；不可见任务统一返回 404。
+
+### GET `/jobs`
+
+分页查询当前用户可见的异步任务。支持 `page_size`（1..100，默认 50）、不透明 `cursor`、`status`、`type`、`project_id`、`resource_type`、`created_after`、`created_before` 和 `active_only`（仅 `queued`/`running`）。结果按活动任务优先、创建时间倒序、任务 ID 倒序稳定排序，响应为 `{items,next_cursor}`。
+
 ### GET `/jobs/{job_id}`
 
 所有异步导入、解析、导出、索引和批量操作统一通过任务接口查询：
@@ -922,11 +1056,19 @@ Response `200`：
   "id": "job-import-123",
   "type": "document_import",
   "status": "running",
+  "resource_type": "document",
+  "resource_id": "document-123",
+  "project_id": "project-123",
+  "requested_version": 2,
+  "attempts": 1,
+  "max_attempts": 3,
   "progress": 0.65,
   "message": "正在解析第 650/1000 个 segment",
   "result": null,
   "error": null,
   "created_at": "2026-09-20T12:00:00Z",
+  "started_at": "2026-09-20T12:00:01Z",
+  "updated_at": "2026-09-20T12:06:00Z",
   "finished_at": null
 }
 ```
@@ -936,6 +1078,20 @@ Response `200`：
 ### POST `/jobs/{job_id}/cancel`
 
 取消仍处于 `queued` 或 `running` 的可取消任务。
+
+取消成功返回更新后的任务。任务不可见返回 `404 JOB_NOT_FOUND`；终态任务返回 `409 JOB_NOT_CANCELLABLE`。worker 在提交结果前会重新校验状态、worker owner 和 lease，取消后的任务不能被旧 worker 覆盖。
+
+### GET `/jobs/{job_id}/download`
+
+下载已完成的 `document_export` 任务结果。仅接受服务端生成的短时 `expires` 和 `signature`，签名有效期最多 15 分钟。错误码包括 `JOB_DOWNLOAD_NOT_READY`、`JOB_DOWNLOAD_EXPIRED`、`JOB_DOWNLOAD_INVALID_SIGNATURE` 和 `JOB_RESULT_INVALID`；文件名会经过安全处理，响应不暴露存储路径。
+
+任务错误使用统一结构：
+
+```json
+{"error":{"code":"JOB_NOT_FOUND","message":"后台任务不存在","details":{},"request_id":"request-123"}}
+```
+
+所有可重试的异步生产接口应支持 `Idempotency-Key`。相同 key 和相同请求重放同一个 `job_id`，相同 key 搭配不同请求返回 `409 IDEMPOTENCY_CONFLICT`。CAT 批量动作（超过 100 个 segment）同样遵守此规则。
 
 ### GET `/projects/{project_id}/audit-events`
 
@@ -995,7 +1151,7 @@ src/translation_backend/app/api/modules/
 
 ```text
 projects/ documents/ segments/ worldview/ terminology/
-translation_memory/ suggestions/ qa/ jobs/ audit/
+tm/ suggestions/ qa/ jobs/ audit/
 ```
 
 每个模块建议包含 `routes.py`、`schemas.py`、`service.py`，跨模块共享的认证、权限、分页、错误和数据库能力放入 `app/core` 或 `app/api/shared`，避免路由直接操作 SDK、数据库或模型供应商。
@@ -1008,7 +1164,65 @@ translation_memory/ suggestions/ qa/ jobs/ audit/
 
 所有写请求支持 `X-Request-ID`。可重试的创建、批量、导入、导出和任务写请求必须带 `Idempotency-Key`。配置更新使用 `If-Match: <revision>` 或请求体 `revision` 做乐观锁；冲突返回 `409 VERSION_CONFLICT` 并携带当前 revision。参数错误使用既有统一错误响应和 `422`。
 
-### 15.1 Translation settings
+### 15.1 Project-level Settings API
+
+项目级 Settings 是独立于用户账户设置和项目翻译设置的资源，保存项目工作流默认值。它不属于 `/auth/me/settings`，也不替代 `/projects/{project_id}/translation-settings`；三者使用不同的路由、权限和 schema。所有接口相对于 `/api/v1`，要求 Bearer access token。
+
+#### GET `/projects/{project_id}/settings`
+
+项目成员可读取项目级 settings；非成员返回 `404`，避免泄露项目是否存在。首次读取时服务端创建并返回默认记录：`terminology_enabled=true`、`translation_memory_enabled=true`、`quality_threshold=0.7`，语言和 `default_model` 默认为 `null`，`revision=1`。
+
+成功返回 `200`：
+
+```json
+{
+  "project_id": "project-123",
+  "default_source_language": "zh-CN",
+  "default_target_language": "en-US",
+  "terminology_enabled": true,
+  "translation_memory_enabled": true,
+  "default_model": "gpt-4.1-mini",
+  "quality_threshold": 0.7,
+  "revision": 1,
+  "updated_at": "2026-10-13T00:00:00Z"
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `project_id` | `string` | 路径项目 ID；响应中的项目边界由路径确定。 |
+| `default_source_language` | `string|null` | 项目已配置的默认源语言；可为空。 |
+| `default_target_language` | `string|null` | 项目已配置的默认目标语言；可为空。 |
+| `terminology_enabled` | `boolean` | 是否默认启用术语能力，默认 `true`。 |
+| `translation_memory_enabled` | `boolean` | 是否默认启用翻译记忆，默认 `true`。 |
+| `default_model` | `string|null` | 默认 AI 模型 ID；只保存模型标识，不保存 API key 或其他明文凭据。 |
+| `quality_threshold` | `number` | 质量阈值，范围 `0..1`，默认 `0.7`。 |
+| `revision` | `integer` | 乐观并发版本，初始值为 `1`。 |
+| `updated_at` | ISO 8601 时间 | 最近更新时间。 |
+
+#### PATCH `/projects/{project_id}/settings`
+
+`owner`/`manager` 可部分更新项目级 settings；项目成员中的其他角色返回 `403`。请求体只包含要修改的字段，未提交字段保持原值；空对象返回当前完整对象且不增加 revision。`default_source_language` 与 `default_target_language` 必须同时提交或同时清空，且非空语言对必须属于项目已配置的语言集合。
+
+请求示例：
+
+```json
+{
+  "revision": 1,
+  "default_source_language": "zh-CN",
+  "default_target_language": "en-US",
+  "terminology_enabled": true,
+  "translation_memory_enabled": false,
+  "default_model": "gpt-4.1-mini",
+  "quality_threshold": 0.8
+}
+```
+
+`revision` 可通过请求体提交，也可通过 `If-Match: <revision>` 请求头提交；服务端优先使用 `If-Match`。成功更新返回 `200` 和完整 settings 对象，revision 加一。旧 revision 返回 `409 VERSION_CONFLICT` 并携带当前 revision；未登录返回 `401`；非成员返回 `404`；字段或语言校验失败返回 `422`。
+
+项目级 Settings 的读写不得通过 `/auth/me/settings` 或 `/projects/{project_id}/translation-settings` 完成。用户级 `/auth/me/settings` 只负责账户外观、界面语言和成员搜索隐私；`translation-settings` 只负责世界观、语气、角色、规则及文化规则。
+
+### 15.2 Translation settings
 
 #### GET `/projects/{project_id}/translation-settings`
 
@@ -1072,7 +1286,7 @@ PATCH 请求包含 `revision` 与需要修改的字段，返回完整规则对�
 
 未确认返回 `422 CONFIRMATION_REQUIRED`；revision 不一致返回 `409`。返回 `200` 完整新配置和递增后的 revision。该操作可审计，不得删除模板目录或项目成员。
 
-### 15.2 Terminology workflows
+### 15.3 Terminology workflows
 
 #### POST `/projects/{project_id}/terminology-bases/{base_id}/terms/import`
 
@@ -1098,7 +1312,7 @@ PATCH 请求包含 `revision` 与需要修改的字段，返回完整规则对�
 
 从项目 TM 异步挖掘候选术语。请求 `{tm_base_ids:["tm-1"],source_language:"zh-CN",target_languages:["en"],min_occurrences:2,terminology_base_id:"base-1"}`。成功 `202` 返回 `type=terminology_mine` 的通用 job；候选结果包含原文、译文、频次、来源 segment 与置信度，不自动覆盖已审核词条。
 
-### 15.3 Versions, files and provider keys
+### 15.4 Versions, files and provider keys
 
 #### GET/POST `/projects/{project_id}/versions`
 
@@ -1112,7 +1326,7 @@ GET 支持 `q`、游标分页和 `sort=version_number|created_at|name`，默认�
 
 API key secret 的安全要求适用于用户级 POST 和后端调用链路：生产环境只能通过 HTTPS/TLS 传输；服务端收到 secret 后必须在持久化前使用 AES-256-GCM 加密，只将密文、唯一 nonce/IV 和外部加密密钥版本写入数据库；AES 主密钥必须由数据库外的 KMS 或受控 secret manager 管理，并支持密钥轮换。仅在向 provider 发起请求前由受限后端短暂解密，任何响应、日志、审计、追踪、错误信息和导出均不得包含明文 secret。该方案是 TLS 加应用层静态加密，不是严格 E2E；后端代用户调用 provider 时必须能够解密。
 
-### 15.4 Translation tasks
+### 15.5 Translation tasks
 
 #### GET/POST `/projects/{project_id}/translation-tasks`
 
@@ -1151,7 +1365,7 @@ GET 支持 `source_language`、`target_language`、`status=queued|translating|re
 
 批量翻译完成后只进入 `review`，不会自动将 CAT segment 设为 `in_review`、`approved` 或 `confirmed`；后续审核必须通过现有 segment 工作流逐片段执行。
 
-### 15.5 Analytics
+### 15.6 Analytics
 
 #### 15.5.1 Token usage data model
 
@@ -1297,6 +1511,6 @@ Redis 不是用量事实来源，也不是必需依赖。调用完成后应先�
 
 筛选参数：`from`、`to`（闭区间 ISO 日期）、`target_language`、`status`。返回 `200` `{filters:{...},summary:{task_count,translated_words},daily:[{date,task_count,translated_words}]}`。无记录时返回零汇总与空 `daily`。过滤只影响当前项目，并且统计的 `translated_words` 定义以服务端实现统一采用的词数策略为准；计数不应伪装成模型调用或 token 用量。
 
-### 15.6 Runtime boundary
+### 15.7 Runtime boundary
 
 以上新增路径已具备对应的 FastAPI handler、schema、service、项目权限校验和 analytics migration；translation-report 当前返回权限校验后的零汇总占位结果。SQLite 测试和 OpenAPI 检查不等同于 PostgreSQL migration、Redis、Celery、真实 provider 或生产部署已验证，部署前仍需分别完成这些外部依赖验收。

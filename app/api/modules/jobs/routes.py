@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from starlette.responses import Response
+from fastapi import APIRouter, Depends, Query, Request
+from starlette.responses import JSONResponse, Response
 
-from ....application.jobs.schemas import JobStatusResponse
+from ....application.jobs.schemas import JobListQuery, JobPage, JobStatusResponse
 from ....application.jobs.service import JobConflictError, JobNotFoundError, JobsService
 from ....application.project.document.schemas import DocumentTaskStatusResponse
 from ....application.translation_memory.schemas import TranslationMemoryTaskStatusResponse
@@ -14,6 +14,32 @@ from ...shared.dependencies import get_current_user
 from .dependencies import get_jobs_service
 
 jobs_router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+async def _handle_jobs_error(request: Request, exc: JobConflictError | JobNotFoundError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.code, "message": str(exc), "details": exc.details,
+                            "request_id": getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID")}},
+    )
+
+
+def register_jobs_exception_handler(app) -> None:
+    app.add_exception_handler(JobConflictError, _handle_jobs_error)
+    app.add_exception_handler(JobNotFoundError, _handle_jobs_error)
+
+
+@jobs_router.get(
+    "",
+    response_model=JobPage,
+    description="分页查询当前用户可见的后台任务，支持状态、类型、项目、资源类型、时间范围和 active_only 筛选。",
+)
+async def list_jobs(
+    query: JobListQuery = Depends(),
+    user: User = Depends(get_current_user),
+    service: JobsService = Depends(get_jobs_service),
+) -> JobPage:
+    return await service.list(user, query)
 
 
 @jobs_router.get(
@@ -26,10 +52,7 @@ async def get_job_status(
     user: User = Depends(get_current_user),
     service: JobsService = Depends(get_jobs_service),
 ) -> JobStatusResponse:
-    try:
-        return await service.get_status(user, job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="后台任务不存在") from exc
+    return await service.get_status(user, job_id)
 
 
 @jobs_router.post(
@@ -42,12 +65,7 @@ async def cancel_job(
     user: User = Depends(get_current_user),
     service: JobsService = Depends(get_jobs_service),
 ) -> JobStatusResponse:
-    try:
-        return await service.cancel(user, job_id)
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="后台任务不存在") from exc
-    except JobConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await service.cancel(user, job_id)
 
 
 @jobs_router.get(
@@ -62,14 +80,7 @@ async def download_export(
     user: User = Depends(get_current_user),
     service: JobsService = Depends(get_jobs_service),
 ) -> Response:
-    try:
-        content, filename = await service.download_export(
-            user, job_id, expires=expires, signature=signature
-        )
-    except JobNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="导出文件不存在") from exc
-    except JobConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    content, filename = await service.download_export(user, job_id, expires=expires, signature=signature)
     safe_filename = filename.replace('"', "")
     return Response(
         content=content,

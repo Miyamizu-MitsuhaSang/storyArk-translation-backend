@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from ...domain.ai_translation.contracts import TranslationRequest, TranslationResult
+from ...domain.ai_translation.contracts import ProviderCapabilities
 
 
 class FakeModelInvoker:
+    capabilities = ProviderCapabilities(supports_usage=False)
+
     def __init__(self, result: TranslationResult | None = None) -> None:
         self._result = result
         self.last_api_key: str | None = None

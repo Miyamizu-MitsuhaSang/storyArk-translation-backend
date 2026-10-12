@@ -20,6 +20,7 @@ from ...core.security import (
 from .schemas import (
     MeResponse,
     ProjectSummary,
+    ProfileUpdateRequest,
     TokenResponse,
     UserResponse,
 )
@@ -117,6 +118,14 @@ class AuthService:
         user.password_hash = self.hash_password(new_password)
         await self._users.save(user, update_fields=["password_hash", "updated_at"])
         await self._refresh_tokens.revoke_active_for_user(user, revoked_at=datetime.now(timezone.utc))
+
+    async def update_profile(self, user: User, request: ProfileUpdateRequest) -> UserResponse:
+        display_name = request.display_name.strip()
+        if not display_name:
+            raise AuthError("INVALID_DISPLAY_NAME", "显示名称不能为空", status_code=422)
+        user.display_name = display_name
+        await self._users.save(user, update_fields=["display_name", "updated_at"])
+        return UserResponse.model_validate(user)
 
     async def me(self, user: User) -> MeResponse:
         memberships = await self._memberships.list_for_user(user, with_project=True)

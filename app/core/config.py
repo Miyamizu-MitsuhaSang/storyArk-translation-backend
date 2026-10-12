@@ -19,9 +19,9 @@ class AppSettings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379/2"
     tm_cache_enabled: bool = False
     tm_cache_ttl_seconds: int = 60
-    tm_cache_namespace: str = "tm"
+    tm_cache_namespace: str = "translation_memory"
     tm_index_tasks_enabled: bool = False
-    tm_index_storage_dir: Path = BASE_DIR / "var" / "tm-indexes"
+    tm_index_storage_dir: Path = BASE_DIR / "var" / "translation_memory-indexes"
     tm_index_max_artifact_bytes: int = Field(default=536_870_912, gt=0)
     tm_index_retention_count: int = Field(default=3, ge=1)
     tm_search_max_text_length: int = 4096
@@ -38,6 +38,13 @@ class AppSettings(BaseSettings):
     cat_tasks_enabled: bool = False
     translation_tasks_enabled: bool = False
     ai_provider_enabled: bool = False
+    # 中国大模型 provider 开关、兼容接口地址和模型白名单统一由 .env.app 管理。
+    ai_deepseek_enabled: bool = False
+    ai_deepseek_base_url: str = "https://api.deepseek.com"
+    ai_deepseek_models: str = "deepseek-chat,deepseek-reasoner"
+    ai_qwen_enabled: bool = False
+    ai_qwen_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    ai_qwen_models: str = "qwen-plus,qwen-turbo,qwen-max"
     analytics_cache_enabled: bool = False
     analytics_cache_ttl_seconds: int = Field(default=60, ge=30, le=120)
     analytics_cache_namespace: str = "analytics"

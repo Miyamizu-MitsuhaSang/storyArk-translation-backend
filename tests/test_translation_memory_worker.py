@@ -31,7 +31,7 @@ def test_worker_retries_storage_failure_and_duplicate_delivery_does_not_claim_ea
         await Tortoise.init(db_url="sqlite://:memory:", modules={"models": ["translation_backend.app.models"]})
         await Tortoise.generate_schemas()
         try:
-            user = await User.create(username="tm-worker", email="tm-worker@example.com", password_hash="x", display_name="TM")
+            user = await User.create(username="translation_memory-worker", email="translation_memory-worker@example.com", password_hash="x", display_name="TM")
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM")
             job = await BackgroundJob.create(
                 type="tm_index_rebuild",
@@ -70,7 +70,7 @@ def test_worker_claims_only_the_requested_job_and_finishes_it():
         await Tortoise.init(db_url="sqlite://:memory:", modules={"models": ["translation_backend.app.models"]})
         await Tortoise.generate_schemas()
         try:
-            user = await User.create(username="tm-worker-target", email="tm-worker-target@example.com", password_hash="x", display_name="TM")
+            user = await User.create(username="translation_memory-worker-target", email="translation_memory-worker-target@example.com", password_hash="x", display_name="TM")
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM")
             unrelated = await BackgroundJob.create(
                 type="tm_index_rebuild", resource_type="translation_memory_library",
@@ -99,7 +99,7 @@ def test_rebuild_dispatcher_is_async_idempotent_and_uses_job_id_as_task_id(monke
         await Tortoise.init(db_url="sqlite://:memory:", modules={"models": ["translation_backend.app.models"]})
         await Tortoise.generate_schemas()
         try:
-            user = await User.create(username="tm-enqueue", email="tm-enqueue@example.com", password_hash="x", display_name="TM")
+            user = await User.create(username="translation_memory-enqueue", email="translation_memory-enqueue@example.com", password_hash="x", display_name="TM")
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM")
             dispatched = []
             monkeypatch.setattr(
@@ -141,7 +141,7 @@ def test_celery_eager_worker_builds_and_publishes_index(tmp_path, monkeypatch):
     async def seed_database():
         await Tortoise.init(config=tortoise_config)
         await Tortoise.generate_schemas()
-        user = await User.create(username="tm-eager", email="tm-eager@example.com", password_hash="x", display_name="TM")
+        user = await User.create(username="translation_memory-eager", email="translation_memory-eager@example.com", password_hash="x", display_name="TM")
         library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM")
         await TranslationMemoryEntry.create(
             library=library,

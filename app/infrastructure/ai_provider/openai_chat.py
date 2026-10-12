@@ -3,14 +3,15 @@ from __future__ import annotations
 from time import perf_counter
 from typing import Any, Callable
 
-from ...domain.ai_translation.contracts import TranslationRequest, TranslationResult, UsageSnapshot
-from ...domain.ai_translation.errors import ProviderCallError
+from ...domain.ai_translation.contracts import ProviderCapabilities, TranslationRequest, TranslationResult, UsageSnapshot
+from ...domain.ai_translation.errors import ProviderAuthenticationError, ProviderCallError, ProviderRateLimitError, ProviderTimeoutError
 
 
 class OpenAIChatInvoker:
     """Lazy OpenAI Chat Completions adapter; SDK errors are normalized."""
 
     provider = "openai"
+    capabilities = ProviderCapabilities(supports_usage=True, supports_context=True)
 
     def __init__(self, *, client_factory: Callable[[str], Any] | None = None) -> None:
         self._client_factory = client_factory
@@ -55,6 +56,13 @@ class OpenAIChatInvoker:
         except ProviderCallError:
             raise
         except Exception as exc:
+            name = type(exc).__name__.casefold()
+            if "timeout" in name:
+                raise ProviderTimeoutError("provider 请求超时", code="PROVIDER_TIMEOUT") from None
+            if "ratelimit" in name or "rate_limit" in name:
+                raise ProviderRateLimitError("provider 请求受限", code="PROVIDER_RATE_LIMITED") from None
+            if "authentication" in name or "permission" in name:
+                raise ProviderAuthenticationError("provider 凭据无效", code="PROVIDER_AUTH_FAILED") from None
             raise ProviderCallError("OpenAI provider 调用失败", code="PROVIDER_CALL_FAILED") from None
 
     @staticmethod

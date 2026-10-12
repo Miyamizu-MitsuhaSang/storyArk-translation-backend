@@ -1,9 +1,13 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
 from typing import Any
 
 from tortoise import fields
 
 from .base import TimestampedModel
+
+if TYPE_CHECKING:
+    from .project_settings import ProjectSettings
 
 PROJECT_STATUSES = ("draft", "active", "archived")
 PROJECT_MEMBER_ROLES = ("owner", "manager", "translator", "reviewer", "viewer")
@@ -24,6 +28,7 @@ WORLDVIEW_ENTRY_TYPES = (
 
 
 class Project(TimestampedModel):
+    settings: fields.ReverseRelation["ProjectSettings"]
     key = fields.CharField(
         max_length=64,
         unique=True,

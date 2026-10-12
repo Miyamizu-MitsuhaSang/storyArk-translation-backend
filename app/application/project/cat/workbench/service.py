@@ -181,7 +181,7 @@ class CatWorkbenchService:
             self._ensure_owned_lock(await self._repository.get_lock(segment.id), user, request.lock_token)
         suggestions: list[SuggestionResponse] = []
         warnings: list[str] = []
-        if "tm" in request.providers:
+        if "translation_memory" in request.providers:
             started = perf_counter()
             try:
                 result = await self._translation_memory.search(
@@ -199,10 +199,10 @@ class CatWorkbenchService:
                     suggestions.append(
                         await self._persist_suggestion(
                             segment,
-                            source="tm",
+                            source="translation_memory",
                             text=match.target_text,
                             score=match.score,
-                            evidence=[{"type": "tm", "id": str(match.entry_id)}] if request.include_explanation else [],
+                            evidence=[{"type": "translation_memory", "id": str(match.entry_id)}] if request.include_explanation else [],
                             warnings=[],
                             latency_ms=int((perf_counter() - started) * 1000),
                         )

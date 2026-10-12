@@ -15,6 +15,7 @@ from translation_backend.app.application.translation_memory.schemas import (
 from translation_backend.app.infrastructure.translation_memory.cache import build_search_cache_key
 from translation_backend.app.application.translation_memory.service import TranslationMemoryService
 from translation_backend.app.application.translation_memory.service import (
+    TranslationMemoryQueryTooLongError,
     TranslationMemoryCursorError,
     TranslationMemoryIdempotencyError,
 )
@@ -86,9 +87,30 @@ def test_cache_key_changes_when_library_content_version_changes(tm_request):
 
 def test_search_request_rejects_large_top_k_and_query_text():
     with pytest.raises(ValidationError):
-        TranslationMemorySearchRequest(source_text="x", source_language="en", target_language="zh", top_k=51)
+        TranslationMemorySearchRequest(source_text="x", source_language="en", target_language="zh", top_k=21)
     with pytest.raises(ValidationError):
         TranslationMemorySearchRequest(source_text="x" * 16385, source_language="en", target_language="zh")
+
+
+def test_search_rejects_configured_long_query_with_specific_error_code():
+    from translation_backend.app.application.translation_memory.schemas import TranslationMemorySearchRequest
+
+    request = TranslationMemorySearchRequest(source_text="x", source_language="en", target_language="zh")
+    service = TranslationMemoryService()
+    import asyncio
+
+    async def scenario():
+        from translation_backend.app.core.config import app_settings
+        original = app_settings.tm_search_max_text_length
+        app_settings.tm_search_max_text_length = 0
+        try:
+            with pytest.raises(TranslationMemoryQueryTooLongError) as raised:
+                await service.search(object(), object(), request)
+            assert raised.value.code == "TRANSLATION_MEMORY_QUERY_TOO_LONG"
+        finally:
+            app_settings.tm_search_max_text_length = original
+
+    asyncio.run(scenario())
 
 
 def test_translation_memory_service_falls_back_to_sqlite_when_cache_is_unavailable(tm_request):
@@ -100,9 +122,9 @@ def test_translation_memory_service_falls_back_to_sqlite_when_cache_is_unavailab
         await Tortoise.generate_schemas()
         try:
             user = await User.create(
-                username="tm-test", email="tm-test@example.com", password_hash="hash", display_name="TM Test"
+                username="translation_memory-test", email="translation_memory-test@example.com", password_hash="hash", display_name="TM Test"
             )
-            project = await Project.create(key="tm-test-project", name="TM Test", created_by=user)
+            project = await Project.create(key="translation_memory-test-project", name="TM Test", created_by=user)
             await ProjectMember.create(project=project, user=user, role="owner")
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM Test")
             await TranslationMemoryEntry.create(
@@ -130,7 +152,7 @@ def test_service_uses_configured_query_length_limit(tm_request, monkeypatch):
     monkeypatch.setattr(app_settings, "tm_search_max_text_length", 4)
 
     async def scenario():
-        with pytest.raises(TranslationMemoryCursorError):
+        with pytest.raises(TranslationMemoryQueryTooLongError):
             await TranslationMemoryService(cache=UnavailableCache()).search(
                 User(id=uuid4()), uuid4(), tm_request
             )
@@ -191,7 +213,7 @@ def test_import_rejects_same_idempotency_key_with_different_payload():
         await Tortoise.generate_schemas()
         try:
             user = await User.create(
-                username="tm-idempotency", email="tm-idempotency@example.com", password_hash="hash", display_name="TM Idempotency"
+                username="translation_memory-idempotency", email="translation_memory-idempotency@example.com", password_hash="hash", display_name="TM Idempotency"
             )
             library = await TranslationMemoryLibrary.create(scope="user", owner_user=user, name="TM Idempotency")
             service = TranslationMemoryService(cache=UnavailableCache())

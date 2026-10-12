@@ -7,6 +7,7 @@ from uuid import UUID
 
 from .....core.config import app_settings
 from .....models import BackgroundJob, DocumentSegment, User
+from ....idempotency import execute_idempotently
 from ...audit import ProjectAuditService
 from .....repositories import CatRepository, MembershipRepository
 from ....translation_memory.service import TranslationMemoryService
@@ -160,7 +161,28 @@ class CatWorkflowService(CatWorkbenchService):
         )
         return self._segment_response(segment)
 
-    async def bulk_action(self, user: User, project_id: UUID, request: BulkActionRequest) -> BulkActionResponse:
+    async def bulk_action(
+        self,
+        user: User,
+        project_id: UUID,
+        request: BulkActionRequest,
+        *,
+        idempotency_key: str | None = None,
+    ) -> BulkActionResponse:
+        if idempotency_key is not None:
+            return await execute_idempotently(
+                user,
+                operation="cat.bulk_action",
+                scope=f"project:{project_id}",
+                key=idempotency_key,
+                payload=request.model_dump(mode="json"),
+                response_type=BulkActionResponse,
+                callback=lambda: self._bulk_action_impl(user, project_id, request),
+            )
+        return await self._bulk_action_impl(user, project_id, request)
+
+    async def _bulk_action_impl(self, user: User, project_id: UUID, request: BulkActionRequest) -> BulkActionResponse:
+        await self._membership(user, project_id)
         if len(request.segment_ids) > 100:
             job = await BackgroundJob.create(
                 type="cat_bulk_action",
